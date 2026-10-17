@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { MapPin, LogOut, Plus, ClipboardList, Star, Shield, Phone, Briefcase, Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon } from 'lucide-react';
+import { MapPin, LogOut, Plus, ClipboardList, Star, Shield, Phone, Briefcase, Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon, ArrowRightLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStaticData } from '@/hooks/useStaticData';
@@ -8,7 +8,7 @@ import { useStaticData } from '@/hooks/useStaticData';
 import type { Listing, Order, Review } from '@/types';
 import ListingCard from '@/components/ListingCard';
 
-type Tab = 'services' | 'orders' | 'reviews' | 'edit';
+type Tab = 'services' | 'orders' | 'reviews' | 'edit' | 'wallet';
 
 export default function ProfilePage() {
   const { profile, session, loading, signOut, refreshProfile } = useAuth();
@@ -18,6 +18,10 @@ export default function ProfilePage() {
   const [myListings, setMyListings] = useState<Listing[]>([]);
   const [myOrders, setMyOrders] = useState<Order[]>([]);
   const [myReviews, setMyReviews] = useState<Review[]>([]);
+
+  // Wallet State
+  const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [transactions, setTransactions] = useState<any[]>([]);
 
   // Edit form state
   const [editName, setEditName] = useState('');
@@ -47,6 +51,7 @@ export default function ProfilePage() {
     setEditAvatar(profile.avatar_url);
 
     (async () => {
+      // 1. Fetch Listings and Orders
       const [listRes, orderRes] = await Promise.all([
         supabase
           .from('listings')
@@ -59,10 +64,19 @@ export default function ProfilePage() {
           .or(`client_id.eq.${profile.id},provider_id.eq.${profile.id}`)
           .order('created_at', { ascending: false }),
       ]);
+      
       setMyListings((listRes.data as Listing[]) || []);
       setMyOrders((orderRes.data as Order[]) || []);
 
-      // Get reviews on my listings
+      // 2. Fetch Wallet & Transactions
+      const { data: wData } = await supabase.from('wallets').select('id, balance').eq('user_id', profile.id).maybeSingle();
+      if (wData) {
+        setWalletBalance(Number(wData.balance));
+        const { data: tData } = await supabase.from('wallet_transactions').select('*').eq('wallet_id', wData.id).order('created_at', { ascending: false });
+        setTransactions(tData || []);
+      }
+
+      // 3. Fetch Reviews
       if ((listRes.data as Listing[])?.length > 0) {
         const listingIds = (listRes.data as Listing[]).map((l) => l.id);
         const revRes = await supabase
@@ -126,9 +140,15 @@ export default function ProfilePage() {
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'services', label: 'الخدمات', count: myListings.length },
     { key: 'orders', label: 'الطلبات', count: myOrders.length },
+    { key: 'wallet', label: 'المحفظة' },
     { key: 'reviews', label: 'التقييمات', count: myReviews.length },
-    { key: 'edit', label: 'تعديل الملف' },
+    { key: 'edit', label: 'الإعدادات' },
   ];
+
+  const getTxTypeLabel = (type: string) => {
+    const types: Record<string, string> = { deposit: 'إيداع', withdrawal: 'سحب', payment: 'دفع لخدمة', refund: 'استرداد', commission: 'عمولة منصة' };
+    return types[type] || type;
+  };
 
   return (
     <div className="pb-20 md:pb-8">
@@ -188,12 +208,6 @@ export default function ProfilePage() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setTab('edit')}
-                  className="btn-ghost !bg-primary-50 !text-primary-700 hidden sm:flex"
-                >
-                  تعديل الملف
-                </button>
-                <button
                   onClick={() => signOut()}
                   className="btn-ghost !bg-error-50 !text-error-600 hidden sm:flex"
                 >
@@ -217,13 +231,26 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        <Link to="/wallet" className="card mb-6 flex items-center justify-between gap-4 border-primary-100 bg-primary-50/60 p-4 transition-colors hover:bg-primary-50">
+        {/* Real Wallet Banner */}
+        <div 
+          onClick={() => setTab('wallet')} 
+          className="card mb-6 flex cursor-pointer items-center justify-between gap-4 border-emerald-100 bg-emerald-50/60 p-4 transition-colors hover:bg-emerald-50"
+        >
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-100 text-primary-700"><WalletIcon size={20} /></div>
-            <div><p className="font-bold text-slate-800">المحفظة المالية</p><p className="text-xs text-slate-500">الرصيد، الأرباح، وسجل العمليات</p></div>
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+              <WalletIcon size={24} />
+            </div>
+            <div>
+              <p className="font-bold text-slate-800">الرصيد الحالي بالمحفظة</p>
+              <p className="text-xl font-black text-emerald-600 mt-0.5">
+                {walletBalance.toLocaleString('ar-EG')} ر.ي
+              </p>
+            </div>
           </div>
-          <span className="text-sm font-bold text-primary-700">عرض المحفظة</span>
-        </Link>
+          <span className="text-sm font-bold text-emerald-700 bg-emerald-100/50 px-4 py-2 rounded-xl hidden sm:block">
+            عرض العمليات
+          </span>
+        </div>
 
         {/* Tabs */}
         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6">
@@ -312,6 +339,49 @@ export default function ProfilePage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* WALLET TAB (NEW) */}
+        {tab === 'wallet' && (
+          <div className="space-y-4 animate-fade-in">
+            <h2 className="text-lg font-bold text-slate-800">سجل العمليات المالية</h2>
+            
+            <div className="card overflow-hidden">
+              {transactions.length === 0 ? (
+                <div className="p-10 text-center">
+                  <ArrowRightLeft size={32} className="mx-auto text-slate-300 mb-3" />
+                  <p className="text-slate-400">لا توجد عمليات مالية في محفظتك حتى الآن</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {transactions.map(tx => {
+                    const isPositive = ['deposit', 'refund'].includes(tx.type);
+                    return (
+                      <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${isPositive ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                            <ArrowRightLeft size={18} />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-800">{getTxTypeLabel(tx.type)}</p>
+                            <p className="text-xs text-slate-500">{new Date(tx.created_at).toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                          </div>
+                        </div>
+                        <div className="text-left">
+                          <p className={`font-black ${isPositive ? 'text-emerald-600' : 'text-slate-800'}`} dir="ltr">
+                            {isPositive ? '+' : '-'}{Number(tx.amount).toLocaleString('ar-EG')} ر.ي
+                          </p>
+                          <p className={`text-xs mt-0.5 ${tx.status === 'completed' ? 'text-emerald-600' : tx.status === 'pending' ? 'text-accent-600' : 'text-rose-600'}`}>
+                            {tx.status === 'completed' ? 'مكتمل' : tx.status === 'pending' ? 'بانتظار التأكيد' : 'مرفوض'}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

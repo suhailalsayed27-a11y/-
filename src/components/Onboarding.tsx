@@ -57,15 +57,12 @@ export default function Onboarding({ onComplete }: { onComplete?: () => void }) 
           <div className="mb-8 flex flex-col items-center">
             <div className="flex h-52 w-64 items-center justify-center overflow-hidden rounded-[2.5rem] bg-[#f5f2e9] shadow-2xl shadow-primary-900/10 ring-1 ring-primary-100">
               <img
-                src="/WhatsApp_Image_2026-10-04_at_12.41.53_AM.jpeg"
+                src="/مهرة1.png"
                 alt="شعار مَهَرَة الأزرق"
                 className="h-full w-full object-cover"
               />
             </div>
-            <div className="mt-5 flex items-center gap-2 text-primary-700">
-              <Logo size="sm" showText={false} className="!gap-0" />
-              <span className="text-sm font-bold">مهارات وخدمات</span>
-            </div>
+            
           </div>
         ) : (
           <div className={`relative mb-8 flex h-48 w-48 items-center justify-center rounded-[2.5rem] bg-gradient-to-br ${slide.color} shadow-2xl`}>

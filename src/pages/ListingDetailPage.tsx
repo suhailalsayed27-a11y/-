@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight, CheckCircle, X, Loader2 } from 'lucide-react';
+import { MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight, CheckCircle, X, Loader2, Wallet as WalletIcon, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { getCategoryColor } from '@/types';
@@ -16,10 +16,13 @@ export default function ListingDetailPage() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [images, setImages] = useState<ListingImage[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Order & Wallet States
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderNotes, setOrderNotes] = useState('');
   const [orderStatus, setOrderStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error'; msg?: string }>({ type: 'idle' });
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -39,6 +42,16 @@ export default function ListingDetailPage() {
       setLoading(false);
     })();
   }, [id]);
+
+  // جلب رصيد المحفظة عند فتح نافذة الطلب
+  useEffect(() => {
+    if (showOrderModal && profile) {
+      supabase.from('wallets').select('balance').eq('user_id', profile.id).maybeSingle()
+        .then(({ data }) => {
+           setWalletBalance(data ? Number(data.balance) : 0);
+        });
+    }
+  }, [showOrderModal, profile]);
 
   const handleContact = async () => {
     if (!profile) {
@@ -84,6 +97,12 @@ export default function ListingDetailPage() {
     }
     if (!listing) return;
 
+    const fees = calculateFees(Number(listing.price));
+    if (walletBalance === null || walletBalance < fees.customer_total) {
+      setOrderStatus({ type: 'error', msg: 'رصيد المحفظة غير كافٍ لإتمام الطلب' });
+      return;
+    }
+
     setOrderStatus({ type: 'loading' });
     const { error } = await supabase.rpc('create_order', {
       p_listing_id: listing.id,
@@ -94,12 +113,15 @@ export default function ListingDetailPage() {
       setOrderStatus({ type: 'error', msg: error.message });
     } else {
       setOrderStatus({ type: 'success' });
+      // نحدث الرصيد محلياً للواجهة
+      setWalletBalance(prev => prev !== null ? prev - fees.customer_total : 0);
+      
       setTimeout(() => {
         setShowOrderModal(false);
         setOrderStatus({ type: 'idle' });
         setOrderNotes('');
         navigate('/orders');
-      }, 1500);
+      }, 2000);
     }
   };
 
@@ -216,11 +238,12 @@ export default function ListingDetailPage() {
                 طلب الخدمة
               </button>
             </div>
+            
             <div className="mt-6 mb-4 p-4 bg-yellow-50 border-r-4 border-yellow-500 rounded-lg shadow-sm">
-  <p className="text-sm text-yellow-800 text-right font-cairo leading-relaxed">
-    <span className="font-bold">🛡️ سلامتك وحقوقك تهمنا:</span> تجنّب الاتفاقات والمدفوعات خارج منصة مَهَرَة، لأن المنصة لن تتمكن من حماية حقوقك أو معالجة النزاعات المالية في حال تم الدفع خارجها.
-  </p>
-</div>
+              <p className="text-sm text-yellow-800 text-right font-cairo leading-relaxed">
+                <span className="font-bold">🛡️ سلامتك وحقوقك تهمنا:</span> تجنّب الاتفاقات والمدفوعات خارج منصة مَهَرَة، لأن المنصة لن تتمكن من حماية حقوقك أو معالجة النزاعات المالية في حال تم الدفع خارجها.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -289,6 +312,8 @@ export default function ListingDetailPage() {
       {/* Order modal */}
       {showOrderModal && listing && (() => {
         const fees = calculateFees(Number(listing.price));
+        const isBalanceSufficient = walletBalance !== null && walletBalance >= fees.customer_total;
+
         return (
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => orderStatus.type !== 'loading' && setShowOrderModal(false)}>
             <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
@@ -297,13 +322,14 @@ export default function ListingDetailPage() {
                   <div className="flex h-16 w-16 items-center justify-center rounded-full bg-success-100 mb-4">
                     <CheckCircle size={36} className="text-success-600" />
                   </div>
-                  <h3 className="text-lg font-black text-slate-800 mb-1">تم إرسال طلبك بنجاح!</h3>
-                  <p className="text-sm text-slate-500">سيتم التواصل معك قريبًا</p>
+                  <h3 className="text-lg font-black text-slate-800 mb-1">تم الدفع وإرسال طلبك بنجاح!</h3>
+                  <p className="text-sm text-slate-500">تم خصم المبلغ من محفظتك بانتظار قبول مقدم الخدمة.</p>
                 </div>
               ) : (
                 <>
                   <h3 className="text-lg font-black text-slate-800 mb-1">ملخص الدفع والطلب</h3>
-                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} - {providerName}</p>
+                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} • {providerName}</p>
+                  
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">ملاحظات (اختياري)</label>
@@ -333,22 +359,32 @@ export default function ListingDetailPage() {
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-400 text-center">
-                      لا توجد رسوم خفية. أنت تدفع فقط المبلغ الموضح أعلاه.
-                    </p>
-
-                    <div className="rounded-2xl border border-dashed border-primary-200 bg-primary-50/50 p-4">
-                      <p className="mb-3 text-sm font-bold text-slate-700">اختيار طريقة الدفع</p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <div className="rounded-xl bg-white px-3 py-2 text-center text-xs font-bold text-slate-500 ring-1 ring-slate-200">رصيد مَهَرَة <span className="mt-1 block text-[10px] text-primary-500">قريبًا</span></div>
-                        <div className="rounded-xl bg-white px-3 py-2 text-center text-xs font-bold text-slate-500 ring-1 ring-slate-200">جيب <span className="mt-1 block text-[10px] text-primary-500">قريبًا</span></div>
-                        <div className="rounded-xl bg-white px-3 py-2 text-center text-xs font-bold text-slate-500 ring-1 ring-slate-200">مزود آخر <span className="mt-1 block text-[10px] text-primary-500">قريبًا</span></div>
+                    {/* Wallet Payment Selection */}
+                    <div className="rounded-2xl border-2 border-primary-100 bg-primary-50 p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <WalletIcon size={20} className="text-primary-600" />
+                        <span className="font-bold text-slate-700">الدفع عبر محفظة مَهَرَة</span>
                       </div>
+                      
+                      <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-100 mb-2">
+                        <span className="text-sm text-slate-500">رصيدك الحالي</span>
+                        <span className="font-black text-primary-700">
+                          {walletBalance !== null ? formatYER(walletBalance) : '...'} ريال
+                        </span>
+                      </div>
+
+                      {!isBalanceSufficient && walletBalance !== null && (
+                        <div className="flex items-start gap-2 text-xs text-error-600 bg-error-50 p-3 rounded-xl mt-2">
+                          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                          <p>عفواً، رصيدك غير كافٍ. يرجى شحن المحفظة لإتمام الطلب.</p>
+                        </div>
+                      )}
                     </div>
 
                     {orderStatus.type === 'error' && (
                       <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{orderStatus.msg}</p>
                     )}
+                    
                     <div className="flex gap-2">
                       <button
                         onClick={() => setShowOrderModal(false)}
@@ -359,30 +395,22 @@ export default function ListingDetailPage() {
                       </button>
                       <button
                         onClick={handleOrder}
-                        disabled={orderStatus.type === 'loading' || !session}
-                        className="btn-primary flex-1"
+                        disabled={orderStatus.type === 'loading' || !session || !isBalanceSufficient}
+                        className={`flex-1 ${isBalanceSufficient ? 'btn-primary' : 'btn-primary opacity-50 cursor-not-allowed'}`}
                       >
                         {orderStatus.type === 'loading' ? (
                           <span className="flex items-center gap-2">
                             <Loader2 size={18} className="animate-spin" />
-                            جاري الإرسال...
+                            جاري الدفع...
                           </span>
                         ) : (
                           <span className="flex items-center gap-2">
                             <ShoppingCart size={18} />
-                            إنشاء الطلب
+                            تأكيد الطلب
                           </span>
                         )}
                       </button>
                     </div>
-                    {!session && (
-                      <p className="text-xs text-center text-slate-400">يجب تسجيل الدخول أولاً</p>
-                    )}
-                    {session && (
-                      <p className="text-xs text-center text-slate-400">
-                        الدفع الإلكتروني غير متصل حاليًا. لن يتم خصم أي مبلغ؛ سيُنشأ الطلب بانتظار ربط مزود دفع موثوق.
-                      </p>
-                    )}
                   </div>
                 </>
               )}

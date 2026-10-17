@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Tag, MapPin, Users, ClipboardList, Settings,
   LogOut, Menu, X, CheckCircle, XCircle, Eye, EyeOff, Trash2, Edit3, Plus,
   TrendingUp, UserCheck, Building, Package, ArrowLeft, Search, Star, Shield,
-  Megaphone, Loader2, Scale, Wallet,
+  Megaphone, Loader2, Scale, Wallet, CreditCard, ArrowRightLeft,
   type LucideIcon
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -49,7 +49,7 @@ export default function AdminPage() {
     { key: 'providers', label: 'مقدمو الخدمات', icon: UserCheck },
     { key: 'orders', label: 'الطلبات', icon: ClipboardList },
     { key: 'disputes', label: 'النزاعات', icon: Scale },
-    { key: 'finance', label: 'المالية', icon: Wallet },
+    { key: 'finance', label: 'المالية والمحافظ', icon: Wallet },
     { key: 'notifications', label: 'إرسال إشعار', icon: Megaphone },
     { key: 'homepage', label: 'الصفحة الرئيسية', icon: Settings },
   ];
@@ -158,7 +158,7 @@ export default function AdminPage() {
 function DashboardSection() {
   const [stats, setStats] = useState({
     totalUsers: 0, providers: 0, clients: 0, listings: 0, orders: 0,
-    pendingListings: 0, pendingProviders: 0,
+    pendingListings: 0, pendingProviders: 0, totalWalletBalances: 0
   });
   const [categoryStats, setCategoryStats] = useState<{ name: string; count: number }[]>([]);
   const [cityStats, setCityStats] = useState<{ name: string; count: number }[]>([]);
@@ -166,7 +166,7 @@ function DashboardSection() {
 
   useEffect(() => {
     (async () => {
-      const [usersRes, provRes, clientRes, listRes, orderRes, pendListRes, pendProvRes] = await Promise.all([
+      const [usersRes, provRes, clientRes, listRes, orderRes, pendListRes, pendProvRes, walletsRes] = await Promise.all([
         supabase.from('profiles').select('id', { count: 'exact', head: true }),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).neq('account_type', 'client'),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('account_type', 'client'),
@@ -174,7 +174,10 @@ function DashboardSection() {
         supabase.from('orders').select('id', { count: 'exact', head: true }),
         supabase.from('listings').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('provider_status', 'pending').neq('account_type', 'client'),
+        supabase.from('wallets').select('balance')
       ]);
+
+      const totalWalletBalances = (walletsRes.data || []).reduce((sum, w) => sum + Number(w.balance), 0);
 
       setStats({
         totalUsers: usersRes.count || 0,
@@ -184,6 +187,7 @@ function DashboardSection() {
         orders: orderRes.count || 0,
         pendingListings: pendListRes.count || 0,
         pendingProviders: pendProvRes.count || 0,
+        totalWalletBalances
       });
 
       const cats = await supabase.from('categories').select('id, name');
@@ -211,9 +215,9 @@ function DashboardSection() {
   const statCards = [
     { label: 'إجمالي المستخدمين', value: stats.totalUsers, icon: Users, color: 'from-blue-500 to-blue-600' },
     { label: 'مقدمو الخدمات', value: stats.providers, icon: UserCheck, color: 'from-primary-500 to-primary-600' },
-    { label: 'العملاء', value: stats.clients, icon: Building, color: 'from-accent-500 to-accent-600' },
-    { label: 'الخدمات', value: stats.listings, icon: Package, color: 'from-accent-500 to-accent-600' },
     { label: 'الطلبات', value: stats.orders, icon: ClipboardList, color: 'from-pink-500 to-pink-600' },
+    { label: 'إجمالي أموال المحافظ', value: formatYER(stats.totalWalletBalances) + ' ر.ي', icon: Wallet, color: 'from-emerald-500 to-emerald-600' },
+    { label: 'الخدمات', value: stats.listings, icon: Package, color: 'from-accent-500 to-accent-600' },
     { label: 'بانتظار المراجعة', value: stats.pendingListings, icon: TrendingUp, color: 'from-orange-500 to-orange-600' },
   ];
 
@@ -464,7 +468,6 @@ function ListingEditModal({ listing, onClose, onSaved }: { listing: Listing | nu
         price: Number(price), experience,
       }).eq('id', listing.id);
     } else {
-      // Admin adds listing — need a provider. Use first demo provider.
       const { data: demoProvider } = await supabase.from('profiles').select('id').limit(1).maybeSingle();
       if (demoProvider) {
         await supabase.from('listings').insert({
@@ -579,7 +582,7 @@ function CategoriesSection() {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-xl">
-                    {cat.name === 'التقنية والرقمية' ? '💻' : cat.name === 'الأعمال والإدارة' ? '💼' : cat.name === 'المطاعم والضيافة' ? '🍔' : '💄'}
+                    {cat.name === 'التقنية والرقمية' ? '💻' : cat.name === 'الأعمال والإدارة' ? '💼' : cat.name === 'المطاعم والضيافة' ? '🍔' : cat.name === 'الحرف اليدوية' ? '🔧' : '✨'}
                   </span>
                   <span className="font-bold text-slate-800">{cat.name}</span>
                   <span className="badge bg-slate-100 text-slate-500">{catServices.length} خدمة</span>
@@ -666,6 +669,7 @@ function CategoryEditModal({ category, onClose, onSave }: { category: Category |
             <option value="Sparkles">💄 جمال</option>
             <option value="Camera">📷 تصوير</option>
             <option value="Wrench">🔧 صيانة</option>
+            <option value="Tool">🛠️ أدوات وحرف</option>
             <option value="GraduationCap">🎓 تعليم</option>
           </select>
         </div>
@@ -766,13 +770,18 @@ function CitiesSection() {
 // ============ USERS ============
 function UsersSection() {
   const [users, setUsers] = useState<Profile[]>([]);
+  const [wallets, setWallets] = useState<{user_id: string, balance: number}[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
-      setUsers((data as Profile[]) || []);
+      const [{ data: usersData }, { data: walletsData }] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase.from('wallets').select('user_id, balance')
+      ]);
+      setUsers((usersData as Profile[]) || []);
+      setWallets(walletsData || []);
       setLoading(false);
     })();
   }, []);
@@ -814,57 +823,62 @@ function UsersSection() {
               <th className="px-4 py-3 font-bold">الاسم</th>
               <th className="px-4 py-3 font-bold hidden sm:table-cell">البريد</th>
               <th className="px-4 py-3 font-bold">النوع</th>
-              <th className="px-4 py-3 font-bold hidden md:table-cell">المدينة</th>
+              <th className="px-4 py-3 font-bold">رصيد المحفظة</th>
               <th className="px-4 py-3 font-bold">الحالة</th>
               <th className="px-4 py-3 font-bold">إجراءات</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filtered.map((u) => (
-              <tr key={u.id} className="hover:bg-slate-50">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    {u.avatar_url ? (
-                      <img src={u.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+            {filtered.map((u) => {
+              const wallet = wallets.find(w => w.user_id === u.id);
+              return (
+                <tr key={u.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      {u.avatar_url ? (
+                        <img src={u.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-xs font-bold text-primary-700">
+                          {u.full_name.charAt(0)}
+                        </div>
+                      )}
+                      <span className="font-bold text-slate-800">{u.full_name}</span>
+                      {u.is_admin && <Shield size={14} className="text-primary-500" />}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-500 hidden sm:table-cell" dir="ltr">{u.email}</td>
+                  <td className="px-4 py-3">
+                    <span className={`badge ${u.account_type === 'provider' ? 'bg-primary-50 text-primary-700' : u.account_type === 'client' ? 'bg-blue-50 text-blue-700' : 'bg-accent-50 text-accent-700'}`}>
+                      {u.account_type === 'provider' ? 'مقدم' : u.account_type === 'client' ? 'عميل' : 'مقدم وعميل'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 font-black text-emerald-600">
+                    {wallet ? formatYER(Number(wallet.balance)) : '0'} ر.ي
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.is_disabled ? (
+                      <span className="badge bg-error-100 text-error-700">معطل</span>
                     ) : (
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-xs font-bold text-primary-700">
-                        {u.full_name.charAt(0)}
-                      </div>
+                      <span className="badge bg-success-100 text-success-700">نشط</span>
                     )}
-                    <span className="font-bold text-slate-800">{u.full_name}</span>
-                    {u.is_admin && <Shield size={14} className="text-primary-500" />}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-slate-500 hidden sm:table-cell" dir="ltr">{u.email}</td>
-                <td className="px-4 py-3">
-                  <span className={`badge ${u.account_type === 'provider' ? 'bg-primary-50 text-primary-700' : u.account_type === 'client' ? 'bg-blue-50 text-blue-700' : 'bg-accent-50 text-accent-700'}`}>
-                    {u.account_type === 'provider' ? 'مقدم' : u.account_type === 'client' ? 'عميل' : 'مقدم وعميل'}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-slate-500 hidden md:table-cell">{u.city || '-'}</td>
-                <td className="px-4 py-3">
-                  {u.is_disabled ? (
-                    <span className="badge bg-error-100 text-error-700">معطل</span>
-                  ) : (
-                    <span className="badge bg-success-100 text-success-700">نشط</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => toggleDisable(u)}
-                      className={`btn-ghost !px-2.5 !py-1.5 ${u.is_disabled ? '!bg-success-50 !text-success-600' : '!bg-accent-50 !text-accent-600'}`}
-                      title={u.is_disabled ? 'تفعيل' : 'تعطيل'}
-                    >
-                      {u.is_disabled ? <CheckCircle size={16} /> : <EyeOff size={16} />}
-                    </button>
-                    <button onClick={() => deleteUser(u.id)} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5" title="حذف">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => toggleDisable(u)}
+                        className={`btn-ghost !px-2.5 !py-1.5 ${u.is_disabled ? '!bg-success-50 !text-success-600' : '!bg-accent-50 !text-accent-600'}`}
+                        title={u.is_disabled ? 'تفعيل' : 'تعطيل'}
+                      >
+                        {u.is_disabled ? <CheckCircle size={16} /> : <EyeOff size={16} />}
+                      </button>
+                      <button onClick={() => deleteUser(u.id)} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5" title="حذف">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {filtered.length === 0 && <div className="p-8 text-center text-slate-400">لا توجد نتائج</div>}
@@ -1235,23 +1249,32 @@ function DisputesSection() {
   );
 }
 
-// ============ FINANCE ============
+// ============ FINANCE & WALLETS (NEW) ============
 function FinanceSection() {
+  const [tab, setTab] = useState<'overview' | 'wallets' | 'transactions'>('overview');
+  
   const [stats, setStats] = useState({
     totalOrderValue: 0, totalCustomerFees: 0, totalProviderFees: 0,
     mahraRevenue: 0, completedCount: 0, cancelledCount: 0, disputedCount: 0,
-    totalOrders: 0, avgOrderValue: 0,
+    totalOrders: 0, avgOrderValue: 0, totalWalletBalances: 0
   });
+  
   const [settings, setSettings] = useState({
     customer_fee_percentage: 2.5, provider_fee_percentage: 2.5,
     minimum_customer_fee: 100, minimum_provider_fee: 100,
   });
+
+  const [wallets, setWallets] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [profiles, setProfiles] = useState<any[]>([]);
+  
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
+      // 1. Fetch Orders and Settings
       const { data: orders } = await supabase.from('orders').select('service_price, customer_fee, provider_fee, mahra_revenue, status');
       const all = orders || [];
       const completed = all.filter((o: { status: string }) => o.status === 'completed');
@@ -1262,15 +1285,30 @@ function FinanceSection() {
       const totalProvFees = all.reduce((s: number, o: { provider_fee: number }) => s + Number(o.provider_fee), 0);
       const totalMahra = all.reduce((s: number, o: { mahra_revenue: number }) => s + Number(o.mahra_revenue), 0);
 
+      const { data: cs } = await supabase.from('commission_settings').select('*').eq('id', 1).maybeSingle();
+      if (cs) setSettings(cs as typeof settings);
+
+      // 2. Fetch Wallets, Transactions, and Profiles for mapping
+      const [{ data: wData }, { data: tData }, { data: pData }] = await Promise.all([
+        supabase.from('wallets').select('*'),
+        supabase.from('wallet_transactions').select('*').order('created_at', { ascending: false }),
+        supabase.from('profiles').select('id, full_name, email')
+      ]);
+
+      const totalWalletBalances = (wData || []).reduce((sum, w) => sum + Number(w.balance), 0);
+
+      setWallets(wData || []);
+      setTransactions(tData || []);
+      setProfiles(pData || []);
+
       setStats({
         totalOrderValue: totalValue, totalCustomerFees: totalCustFees, totalProviderFees: totalProvFees,
         mahraRevenue: totalMahra, completedCount: completed.length, cancelledCount: cancelled.length,
         disputedCount: disputed.length, totalOrders: all.length,
         avgOrderValue: all.length > 0 ? totalValue / all.length : 0,
+        totalWalletBalances
       });
 
-      const { data: cs } = await supabase.from('commission_settings').select('*').eq('id', 1).maybeSingle();
-      if (cs) setSettings(cs as typeof settings);
       setLoading(false);
     })();
   }, []);
@@ -1289,112 +1327,207 @@ function FinanceSection() {
     setTimeout(() => setSaved(false), 2000);
   };
 
-  if (loading) return <LoadingSpinner />;
+  const getTxTypeLabel = (type: string) => {
+    const types: Record<string, string> = { deposit: 'إيداع', withdrawal: 'سحب', payment: 'دفع لخدمة', refund: 'استرداد', commission: 'عمولة للمنصة' };
+    return types[type] || type;
+  };
+  
+  const getTxStatusLabel = (status: string) => {
+    const statuses: Record<string, string> = { pending: 'بانتظار التأكيد', completed: 'مكتمل', rejected: 'مرفوض', failed: 'فاشل' };
+    return statuses[status] || status;
+  };
 
-  const statCards = [
-    { label: 'إجمالي قيمة الطلبات', value: formatYER(stats.totalOrderValue), icon: Package, color: 'from-blue-500 to-blue-600' },
-    { label: 'رسوم العملاء', value: formatYER(stats.totalCustomerFees), icon: TrendingUp, color: 'from-accent-500 to-accent-600' },
-    { label: 'رسوم مقدمي الخدمات', value: formatYER(stats.totalProviderFees), icon: UserCheck, color: 'from-orange-500 to-orange-600' },
-    { label: 'إيرادات مَهَرَة', value: formatYER(stats.mahraRevenue), icon: Wallet, color: 'from-success-500 to-success-600' },
-    { label: 'متوسط قيمة الطلب', value: formatYER(Math.round(stats.avgOrderValue)), icon: TrendingUp, color: 'from-primary-500 to-primary-600' },
-    { label: 'إجمالي الطلبات', value: stats.totalOrders, icon: ClipboardList, color: 'from-slate-500 to-slate-600' },
-  ];
+  if (loading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-6">
-      <h2 className="font-bold text-slate-800">لوحة المالية</h2>
+      <h2 className="font-bold text-slate-800">المالية والمحافظ الحقيقية</h2>
 
-      {/* Financial stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        {statCards.map((s, i) => {
-          const Icon = s.icon;
-          return (
-            <div key={i} className="card p-5">
-              <div className={`flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${s.color} mb-3`}>
-                <Icon size={22} className="text-white" />
-              </div>
-              <p className="text-xl font-black text-slate-800">{s.value}</p>
-              <p className="text-sm text-slate-500">{s.label}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Order status counts */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="card p-4 text-center">
-          <p className="text-2xl font-black text-success-600">{stats.completedCount}</p>
-          <p className="text-xs text-slate-500">مكتملة</p>
-        </div>
-        <div className="card p-4 text-center">
-          <p className="text-2xl font-black text-error-600">{stats.cancelledCount}</p>
-          <p className="text-xs text-slate-500">ملغاة</p>
-        </div>
-        <div className="card p-4 text-center">
-          <p className="text-2xl font-black text-orange-600">{stats.disputedCount}</p>
-          <p className="text-xs text-slate-500">نزاعات</p>
-        </div>
-      </div>
-
-      {/* Commission settings */}
-      <div className="card p-5">
-        <h3 className="font-bold text-slate-800 mb-4">إعدادات العمولة</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">نسبة عمولة العميل (%)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={settings.customer_fee_percentage}
-              onChange={(e) => setSettings({ ...settings, customer_fee_percentage: Number(e.target.value) })}
-              className="input-field"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">نسبة عمولة مقدم الخدمة (%)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={settings.provider_fee_percentage}
-              onChange={(e) => setSettings({ ...settings, provider_fee_percentage: Number(e.target.value) })}
-              className="input-field"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">الحد الأدنى لعمولة العميل</label>
-            <input
-              type="number"
-              value={settings.minimum_customer_fee}
-              onChange={(e) => setSettings({ ...settings, minimum_customer_fee: Number(e.target.value) })}
-              className="input-field"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">الحد الأدنى لعمولة مقدم الخدمة</label>
-            <input
-              type="number"
-              value={settings.minimum_provider_fee}
-              onChange={(e) => setSettings({ ...settings, minimum_provider_fee: Number(e.target.value) })}
-              className="input-field"
-            />
-          </div>
-        </div>
-        {saved && (
-          <div className="mt-3 flex items-center gap-2 rounded-xl bg-success-50 px-4 py-3 text-sm text-success-700">
-            <CheckCircle size={18} /> تم حفظ الإعدادات
-          </div>
-        )}
-        <button onClick={handleSaveSettings} disabled={saving} className="btn-primary mt-4 w-full">
-          {saving ? 'جاري الحفظ...' : 'حفظ الإعدادات'}
+      {/* TABS */}
+      <div className="flex gap-2 overflow-x-auto no-scrollbar">
+        <button onClick={() => setTab('overview')} className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold transition-colors ${tab === 'overview' ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+          نظرة عامة وإعدادات
+        </button>
+        <button onClick={() => setTab('wallets')} className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold transition-colors flex items-center gap-2 ${tab === 'wallets' ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+          <Wallet size={16} /> محافظ المستخدمين
+        </button>
+        <button onClick={() => setTab('transactions')} className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold transition-colors flex items-center gap-2 ${tab === 'transactions' ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+          <ArrowRightLeft size={16} /> سجل المعاملات
         </button>
       </div>
 
-      <div className="rounded-xl bg-accent-50 p-4">
-        <p className="text-sm text-accent-700">
-          ملاحظة: نظام الدفع الحالي غير متصل. يتم حساب العمولات على الخادم (Server-side) ولا يمكن للمستخدمين التلاعب بها.
-          عند ربط بوابة دفع، سيتم تفعيل الدفع الفعلي والتسوية.
-        </p>
-      </div>
+      {tab === 'overview' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Financial stats */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 mb-3">
+                <Wallet size={22} className="text-white" />
+              </div>
+              <p className="text-xl font-black text-slate-800">{formatYER(stats.totalWalletBalances)}</p>
+              <p className="text-sm text-slate-500">إجمالي أموال المحافظ</p>
+            </div>
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-success-500 to-success-600 mb-3">
+                <TrendingUp size={22} className="text-white" />
+              </div>
+              <p className="text-xl font-black text-slate-800">{formatYER(stats.mahraRevenue)}</p>
+              <p className="text-sm text-slate-500">أرباح مَهَرَة المكتملة</p>
+            </div>
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 mb-3">
+                <Package size={22} className="text-white" />
+              </div>
+              <p className="text-xl font-black text-slate-800">{formatYER(stats.totalOrderValue)}</p>
+              <p className="text-sm text-slate-500">قيمة جميع الطلبات</p>
+            </div>
+          </div>
+
+          {/* Commission settings */}
+          <div className="card p-5">
+            <h3 className="font-bold text-slate-800 mb-4">إعدادات العمولة</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">نسبة عمولة العميل (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={settings.customer_fee_percentage}
+                  onChange={(e) => setSettings({ ...settings, customer_fee_percentage: Number(e.target.value) })}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">نسبة عمولة مقدم الخدمة (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={settings.provider_fee_percentage}
+                  onChange={(e) => setSettings({ ...settings, provider_fee_percentage: Number(e.target.value) })}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">الحد الأدنى لعمولة العميل</label>
+                <input
+                  type="number"
+                  value={settings.minimum_customer_fee}
+                  onChange={(e) => setSettings({ ...settings, minimum_customer_fee: Number(e.target.value) })}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">الحد الأدنى لعمولة مقدم الخدمة</label>
+                <input
+                  type="number"
+                  value={settings.minimum_provider_fee}
+                  onChange={(e) => setSettings({ ...settings, minimum_provider_fee: Number(e.target.value) })}
+                  className="input-field"
+                />
+              </div>
+            </div>
+            {saved && (
+              <div className="mt-3 flex items-center gap-2 rounded-xl bg-success-50 px-4 py-3 text-sm text-success-700">
+                <CheckCircle size={18} /> تم حفظ الإعدادات
+              </div>
+            )}
+            <button onClick={handleSaveSettings} disabled={saving} className="btn-primary mt-4 w-full">
+              {saving ? 'جاري الحفظ...' : 'حفظ الإعدادات'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {tab === 'wallets' && (
+        <div className="card overflow-x-auto animate-fade-in">
+          <div className="p-4 border-b border-slate-100 bg-accent-50 text-accent-700 text-sm">
+            ملاحظة: هذا الجدول يعرض الأرصدة الحقيقية المخزنة في قاعدة البيانات. لإضافة أو سحب أرصدة، يتم ذلك تلقائياً عند الدفع لخدمة أو استردادها عبر النظام.
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-right">
+              <tr>
+                <th className="px-4 py-3 font-bold">المستخدم</th>
+                <th className="px-4 py-3 font-bold hidden sm:table-cell">البريد الإلكتروني</th>
+                <th className="px-4 py-3 font-bold">الرصيد الحالي</th>
+                <th className="px-4 py-3 font-bold hidden md:table-cell">تاريخ الإنشاء</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {wallets.map(w => {
+                const user = profiles.find(p => p.id === w.user_id);
+                return (
+                  <tr key={w.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 font-bold text-slate-800">{user?.full_name || 'مستخدم مجهول'}</td>
+                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell" dir="ltr">{user?.email || '-'}</td>
+                    <td className="px-4 py-3 font-black text-emerald-600 text-lg">
+                      {formatYER(Number(w.balance))} {w.currency === 'YER' ? 'ر.ي' : w.currency}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 hidden md:table-cell">
+                      {new Date(w.created_at).toLocaleDateString('ar-EG')}
+                    </td>
+                  </tr>
+                );
+              })}
+              {wallets.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-8 text-center text-slate-400">لا توجد محافظ مسجلة حتى الآن</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === 'transactions' && (
+        <div className="card overflow-x-auto animate-fade-in">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-right">
+              <tr>
+                <th className="px-4 py-3 font-bold hidden sm:table-cell">رقم العملية</th>
+                <th className="px-4 py-3 font-bold">المستخدم</th>
+                <th className="px-4 py-3 font-bold">النوع</th>
+                <th className="px-4 py-3 font-bold">المبلغ</th>
+                <th className="px-4 py-3 font-bold">الحالة</th>
+                <th className="px-4 py-3 font-bold">التاريخ</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {transactions.map(tx => {
+                const wallet = wallets.find(w => w.id === tx.wallet_id);
+                const user = profiles.find(p => p.id === wallet?.user_id);
+                const isPositive = ['deposit', 'refund'].includes(tx.type);
+                return (
+                  <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-slate-400 text-xs hidden sm:table-cell" dir="ltr">#{tx.id.slice(0,8)}</td>
+                    <td className="px-4 py-3 font-bold text-slate-700">{user?.full_name || 'مجهول'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`badge ${isPositive ? 'bg-success-50 text-success-700' : 'bg-slate-100 text-slate-700'}`}>
+                        {getTxTypeLabel(tx.type)}
+                      </span>
+                    </td>
+                    <td className={`px-4 py-3 font-black ${isPositive ? 'text-success-600' : 'text-slate-700'}`} dir="ltr">
+                      {isPositive ? '+' : '-'}{formatYER(Number(tx.amount))}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs ${tx.status === 'completed' ? 'text-success-600 font-bold' : tx.status === 'pending' ? 'text-accent-600' : 'text-error-600'}`}>
+                        {getTxStatusLabel(tx.status)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">
+                      {new Date(tx.created_at).toLocaleDateString('ar-EG')}
+                    </td>
+                  </tr>
+                );
+              })}
+              {transactions.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-400">لا توجد عمليات مسجلة حتى الآن</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -1595,7 +1728,6 @@ function NotificationsSection() {
         </button>
       </div>
 
-      {/* Recent broadcasts */}
       <RecentBroadcasts />
     </div>
   );
@@ -1613,7 +1745,6 @@ function RecentBroadcasts() {
         .eq('type', 'admin_broadcast')
         .order('created_at', { ascending: false })
         .limit(10);
-      // Deduplicate by title+created_at (since broadcasts go to all users)
       const seen = new Set<string>();
       const unique = (data || []).filter((b: { id: string; title: string; body: string | null; created_at: string }) => {
         const key = `${b.title}-${b.created_at}`;

@@ -71,7 +71,7 @@ export default function AddSkillPage() {
         price: Number(price),
         experience,
         city,
-        status: 'published',
+        status: 'pending', // تم التعديل: الخدمة تذهب للمراجعة أولاً ليوافق عليها الأدمن
       })
       .select()
       .single();
@@ -82,10 +82,8 @@ export default function AddSkillPage() {
       return;
     }
 
-    // Save images (for demo, store as URLs — in production would upload to Supabase Storage)
+    // Save images 
     if (data && workImages.length > 0) {
-      // We'd normally upload to storage, for now save URLs directly
-      // Since these are data URLs they're too large for DB; skip if data URLs
       const validUrls = workImages.filter((img) => !img.url.startsWith('data:'));
       if (validUrls.length > 0) {
         await supabase.from('listing_images').insert(
@@ -101,7 +99,7 @@ export default function AddSkillPage() {
     setSuccess(true);
     setSubmitting(false);
     setTimeout(() => {
-      navigate('/services');
+      navigate('/profile'); // تم التوجيه للملف الشخصي ليتمكن من رؤية الخدمة وهي "بانتظار المراجعة"
     }, 2000);
   };
 
@@ -114,8 +112,8 @@ export default function AddSkillPage() {
           <div className="flex h-20 w-20 mx-auto items-center justify-center rounded-full bg-success-100 mb-4">
             <CheckCircle size={44} className="text-success-600" />
           </div>
-          <h2 className="text-xl font-black text-slate-800 mb-2">تم نشر خدمتك بنجاح!</h2>
-          <p className="text-slate-500">سيتم تحويلك إلى صفحة الخدمات...</p>
+          <h2 className="text-xl font-black text-slate-800 mb-2">تم إرسال خدمتك بنجاح!</h2>
+          <p className="text-slate-500">سيتم مراجعتها من قبل الإدارة والموافقة عليها قريباً...</p>
         </div>
       </div>
     );
@@ -175,7 +173,10 @@ export default function AddSkillPage() {
                       }`}
                     >
                       <span className={`flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${color.gradient} text-white text-xs`}>
-                        {cat.name === 'التقنية والرقمية' ? '💻' : cat.name === 'الأعمال والإدارة' ? '💼' : cat.name === 'المطاعم والضيافة' ? '🍔' : '💄'}
+                        {cat.name === 'التقنية والرقمية' ? '💻' : 
+                         cat.name === 'الأعمال والإدارة' ? '💼' : 
+                         cat.name === 'المطاعم والضيافة' ? '🍔' : 
+                         (cat.name === 'الحرف اليدوية' || cat.name === 'Handicrafts') ? '🔧' : '✨'}
                       </span>
                       <span className="text-xs leading-tight text-right">{cat.name}</span>
                     </button>
@@ -270,7 +271,7 @@ export default function AddSkillPage() {
             {submitting ? (
               <span className="flex items-center gap-2">
                 <Loader2 size={20} className="animate-spin" />
-                جاري النشر...
+                جاري الإرسال...
               </span>
             ) : (
               'نشر الخدمة'

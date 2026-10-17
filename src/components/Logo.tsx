@@ -15,7 +15,7 @@ export default function Logo({ className = '', showText = true, size = 'md' }: L
   return (
     <div className={`flex items-center gap-2.5 ${className}`}>
       <img
-        src="/مهرة1.png"
+        src="/WhatsApp_Image_2026-10-04_at_12.41.53_AM.jpeg"
         alt="مَهَرَة"
         className={`${s.box} rounded-2xl object-cover shadow-lg shadow-primary-600/20 shrink-0`}
       />
