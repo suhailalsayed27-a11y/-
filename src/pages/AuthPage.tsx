@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Mail, Lock, User as UserIcon, Eye, EyeOff, Briefcase, ShoppingBag, ArrowLeft, AlertCircle, KeyRound } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Eye, EyeOff, Briefcase, ShoppingBag, ArrowLeft, AlertCircle, KeyRound, Users } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import Logo from '@/components/Logo';
 
@@ -12,7 +12,8 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [accountType, setAccountType] = useState('client');
+  // جعلنا القيمة الافتراضية null لإجبار المستخدم على الاختيار
+  const [accountType, setAccountType] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,6 +34,12 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
         navigate(from);
       }
     } else if (mode === 'signup') {
+      // التحقق من اختيار نوع الحساب
+      if (!accountType) {
+        setError('الرجاء اختيار نوع الحساب لإكمال التسجيل');
+        setLoading(false);
+        return;
+      }
       if (password.length < 6) {
         setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
         setLoading(false);
@@ -151,32 +158,66 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
 
               {mode === 'signup' && (
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">نوع الحساب</label>
-                  <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-sm font-bold text-slate-700 mb-3">نوع الحساب <span className="text-red-500">*</span></label>
+                  <div className="flex flex-col gap-3">
+                    
+                    {/* بطاقة مقدم خدمة */}
                     <button
                       type="button"
                       onClick={() => setAccountType('provider')}
-                      className={`flex flex-col items-center gap-2 rounded-xl border-2 p-4 transition-all ${
+                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
                         accountType === 'provider'
-                          ? 'border-primary-500 bg-primary-50 text-primary-700'
-                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
                       }`}
                     >
-                      <Briefcase size={24} />
-                      <span className="text-sm font-bold">مقدم خدمة</span>
+                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'provider' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
+                        <Briefcase size={22} />
+                      </div>
+                      <div>
+                        <span className={`block text-sm font-bold mb-1 ${accountType === 'provider' ? 'text-primary-800' : 'text-slate-700'}`}>مقدم خدمة</span>
+                        <span className="block text-xs text-slate-500 leading-relaxed">أضف خدماتك، استقبل الطلبات، وأدر أعمالك بشكل كامل.</span>
+                      </div>
                     </button>
+
+                    {/* بطاقة عميل */}
                     <button
                       type="button"
                       onClick={() => setAccountType('client')}
-                      className={`flex flex-col items-center gap-2 rounded-xl border-2 p-4 transition-all ${
+                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
                         accountType === 'client'
-                          ? 'border-primary-500 bg-primary-50 text-primary-700'
-                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
                       }`}
                     >
-                      <ShoppingBag size={24} />
-                      <span className="text-sm font-bold">عميل</span>
+                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'client' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
+                        <ShoppingBag size={22} />
+                      </div>
+                      <div>
+                        <span className={`block text-sm font-bold mb-1 ${accountType === 'client' ? 'text-primary-800' : 'text-slate-700'}`}>عميل</span>
+                        <span className="block text-xs text-slate-500 leading-relaxed">تصفح الخدمات، اطلب ما تحتاجه، وتابع حالة طلباتك.</span>
+                      </div>
                     </button>
+
+                    {/* بطاقة الاثنين معاً */}
+                    <button
+                      type="button"
+                      onClick={() => setAccountType('both')}
+                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
+                        accountType === 'both'
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'both' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
+                        <Users size={22} />
+                      </div>
+                      <div>
+                        <span className={`block text-sm font-bold mb-1 ${accountType === 'both' ? 'text-primary-800' : 'text-slate-700'}`}>الاثنين معًا</span>
+                        <span className="block text-xs text-slate-500 leading-relaxed">استفد من كافة ميزات البيع والشراء بحساب واحد متكامل.</span>
+                      </div>
+                    </button>
+
                   </div>
                 </div>
               )}
