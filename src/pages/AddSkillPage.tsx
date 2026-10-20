@@ -61,6 +61,27 @@ export default function AddSkillPage() {
     }
 
     setSubmitting(true);
+
+    // التحقق من نوع الحساب قبل السماح بالنشر
+    const { data: userProfile, error: profileError } = await supabase
+      .from('profiles')
+      .select('account_type')
+      .eq('id', profile.id)
+      .single();
+
+    if (profileError) {
+      setError('حدث خطأ أثناء التحقق من صلاحيات الحساب.');
+      setSubmitting(false);
+      return;
+    }
+
+    // منع الحساب من نوع "عميل" من النشر وإظهار الرسالة المطلوبة
+    if (userProfile?.account_type === 'client') {
+      setError('لا يمكنك نشر خدمه بحساب عميل');
+      setSubmitting(false);
+      return;
+    }
+
     const { data, error: insertError } = await supabase
       .from('listings')
       .insert({
@@ -71,7 +92,7 @@ export default function AddSkillPage() {
         price: Number(price),
         experience,
         city,
-        status: 'pending', // تم التعديل: الخدمة تذهب للمراجعة أولاً ليوافق عليها الأدمن
+        status: 'pending', // الخدمة تذهب للمراجعة أولاً
       })
       .select()
       .single();
@@ -99,7 +120,7 @@ export default function AddSkillPage() {
     setSuccess(true);
     setSubmitting(false);
     setTimeout(() => {
-      navigate('/profile'); // تم التوجيه للملف الشخصي ليتمكن من رؤية الخدمة وهي "بانتظار المراجعة"
+      navigate('/profile'); 
     }, 2000);
   };
 
