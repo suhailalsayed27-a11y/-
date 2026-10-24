@@ -1315,14 +1315,22 @@ function FinanceSection() {
 
   const handleSaveSettings = async () => {
     setSaving(true);
-    await supabase.from('commission_settings').update({
+    const { error } = await supabase.from('commission_settings').upsert({
+      id: 1,
       customer_fee_percentage: settings.customer_fee_percentage,
       provider_fee_percentage: settings.provider_fee_percentage,
       minimum_customer_fee: settings.minimum_customer_fee,
       minimum_provider_fee: settings.minimum_provider_fee,
       updated_at: new Date().toISOString(),
-    }).eq('id', 1);
+    }, { onConflict: 'id' });
+
     setSaving(false);
+
+    if (error) {
+      alert('حدث خطأ أثناء الحفظ: ' + error.message);
+      return;
+    }
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -1634,22 +1642,48 @@ function NotificationsSection() {
       return;
     }
     setSending(true);
-    const { data, error: rpcError } = await supabase.rpc('send_notification_to_all', {
-      p_title: title.trim(),
-      p_body: body.trim() || null,
-      p_link: link.trim() || null,
-    });
-    setSending(false);
-    if (rpcError) {
-      setError(rpcError.message);
-      return;
+
+    try {
+      // 1. جلب جميع المستخدمين
+      const { data: users, error: usersError } = await supabase
+        .from('profiles')
+        .select('id');
+
+      if (usersError) throw usersError;
+
+      if (!users || users.length === 0) {
+        setError('لا يوجد مستخدمين لإرسال الإشعار لهم.');
+        setSending(false);
+        return;
+      }
+
+      // 2. تجهيز الإشعارات لكل مستخدم
+      const notifications = users.map((u) => ({
+        user_id: u.id,
+        title: title.trim(),
+        body: body.trim() || null,
+        link: link.trim() || null,
+        type: 'admin_broadcast',
+      }));
+
+      // 3. إرسال الإشعارات دفعة واحدة مباشرة
+      const { error: insertError } = await supabase
+        .from('notifications')
+        .insert(notifications);
+
+      if (insertError) throw insertError;
+
+      setSentCount(notifications.length);
+      setSuccess(true);
+      setTitle('');
+      setBody('');
+      setLink('');
+      setTimeout(() => setSuccess(false), 4000);
+    } catch (err: any) {
+      setError(err.message || 'حدث خطأ أثناء الإرسال');
+    } finally {
+      setSending(false);
     }
-    setSentCount(data || 0);
-    setSuccess(true);
-    setTitle('');
-    setBody('');
-    setLink('');
-    setTimeout(() => setSuccess(false), 4000);
   };
 
   return (
