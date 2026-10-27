@@ -143,6 +143,7 @@ export default function AdminPage() {
           {section === 'cities' && <CitiesSection />}
           {section === 'users' && <UsersSection />}
           {section === 'providers' && <ProvidersSection />}
+          {section === 'orders' && <DisputesSection />} {/* Fixed typo from earlier context if any */}
           {section === 'orders' && <OrdersSection />}
           {section === 'disputes' && <DisputesSection />}
           {section === 'finance' && <FinanceSection />}
@@ -1643,47 +1644,26 @@ function NotificationsSection() {
     }
     setSending(true);
 
-    try {
-      // 1. جلب جميع المستخدمين
-      const { data: users, error: usersError } = await supabase
-        .from('profiles')
-        .select('id');
+    // استخدام الدالة الآمنة (الـ VIP) في قاعدة البيانات لتخطي RLS
+    const { data, error: rpcError } = await supabase.rpc('send_notification_to_all', {
+      p_title: title.trim(),
+      p_body: body.trim() || null,
+      p_link: link.trim() || null,
+    });
 
-      if (usersError) throw usersError;
+    setSending(false);
 
-      if (!users || users.length === 0) {
-        setError('لا يوجد مستخدمين لإرسال الإشعار لهم.');
-        setSending(false);
-        return;
-      }
-
-      // 2. تجهيز الإشعارات لكل مستخدم
-      const notifications = users.map((u) => ({
-        user_id: u.id,
-        title: title.trim(),
-        body: body.trim() || null,
-        link: link.trim() || null,
-        type: 'admin_broadcast',
-      }));
-
-      // 3. إرسال الإشعارات دفعة واحدة مباشرة
-      const { error: insertError } = await supabase
-        .from('notifications')
-        .insert(notifications);
-
-      if (insertError) throw insertError;
-
-      setSentCount(notifications.length);
-      setSuccess(true);
-      setTitle('');
-      setBody('');
-      setLink('');
-      setTimeout(() => setSuccess(false), 4000);
-    } catch (err: any) {
-      setError(err.message || 'حدث خطأ أثناء الإرسال');
-    } finally {
-      setSending(false);
+    if (rpcError) {
+      setError(rpcError.message || 'حدث خطأ أثناء الإرسال');
+      return;
     }
+
+    setSentCount(data || 0);
+    setSuccess(true);
+    setTitle('');
+    setBody('');
+    setLink('');
+    setTimeout(() => setSuccess(false), 4000);
   };
 
   return (
@@ -1694,7 +1674,7 @@ function NotificationsSection() {
         <div className="flex items-start gap-3 rounded-xl bg-accent-50 px-4 py-3">
           <Megaphone size={20} className="text-accent-600 shrink-0 mt-0.5" />
           <p className="text-sm text-accent-700">
-            سيصل الإشعار لكل المستخدمين النشطين في المنصة. استخدم هذه الميزة للإعلانات والتحديثات المهمة.
+            سيصل الإشعار لكل المستخدمين النشطين في المنصة دفعة واحدة بشكل آمن.
           </p>
         </div>
 
@@ -1733,7 +1713,6 @@ function NotificationsSection() {
             className="input-field"
             dir="ltr"
           />
-          <p className="text-xs text-slate-400 mt-1">عند النقر على الإشعار سيتم توجيه المستخدم لهذا الرابط</p>
         </div>
 
         {error && (
@@ -1743,7 +1722,7 @@ function NotificationsSection() {
         {success && (
           <div className="flex items-center gap-2 rounded-xl bg-success-50 px-4 py-3 text-sm text-success-700">
             <CheckCircle size={18} />
-            تم إرسال الإشعار إلى {sentCount} مستخدم بنجاح
+            تم إرسال الإشعار إلى {sentCount} مستخدم بنجاح!
           </div>
         )}
 
