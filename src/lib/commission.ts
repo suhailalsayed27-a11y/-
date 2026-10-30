@@ -7,11 +7,10 @@ export interface FeeBreakdown {
   mahra_revenue: number;
 }
 
-// These defaults must match the commission_settings table.
-// The server ALWAYS recalculates — these are for display only.
-const DEFAULT_CUSTOMER_PCT = 2.5;
-const DEFAULT_PROVIDER_PCT = 2.5;
-const MIN_FEE = 100;
+// تم تعديل القيم إلى صفر لتتطابق مع إعداداتك في قاعدة البيانات
+const DEFAULT_CUSTOMER_PCT = 0;
+const DEFAULT_PROVIDER_PCT = 0;
+const MIN_FEE = 0;
 
 export function calculateFees(price: number): FeeBreakdown {
   const customer_fee = Math.max(price * (DEFAULT_CUSTOMER_PCT / 100), MIN_FEE);
