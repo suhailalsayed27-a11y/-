@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Inbox, Clock, CheckCircle, XCircle, Loader2, AlertTriangle,
-  Timer, MessageSquare, Shield, X, Image as ImageIcon, type LucideIcon,
+  Timer, MessageSquare, Shield, X, Image as ImageIcon, Play, type LucideIcon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,13 +13,13 @@ const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; bg: str
   new: { label: 'طلب جديد', color: 'text-blue-700', bg: 'bg-blue-100', icon: Clock },
   in_progress: { label: 'قيد التنفيذ', color: 'text-accent-700', bg: 'bg-accent-100', icon: Loader2 },
   provider_completed: { label: 'تم الإنجاز', color: 'text-accent-700', bg: 'bg-accent-100', icon: CheckCircle },
-  awaiting_customer_confirmation: { label: 'بانتظار تأكيد العميل', color: 'text-orange-700', bg: 'bg-orange-100', icon: Timer },
+  awaiting_customer_confirmation: { label: 'بانتظار التأكيد', color: 'text-orange-700', bg: 'bg-orange-100', icon: Timer },
   pending_payment: { label: 'بانتظار الدفع', color: 'text-blue-700', bg: 'bg-blue-100', icon: Clock },
   paid: { label: 'تم الدفع', color: 'text-success-700', bg: 'bg-success-100', icon: CheckCircle },
   waiting_for_provider: { label: 'بانتظار مقدم الخدمة', color: 'text-blue-700', bg: 'bg-blue-100', icon: Clock },
   accepted: { label: 'تم القبول', color: 'text-accent-700', bg: 'bg-accent-100', icon: CheckCircle },
   completed_by_customer: { label: 'أكد العميل الاستلام', color: 'text-success-700', bg: 'bg-success-100', icon: CheckCircle },
-  protection_period: { label: 'فترة حماية 48 ساعة', color: 'text-orange-700', bg: 'bg-orange-100', icon: Timer },
+  protection_period: { label: 'فترة حماية', color: 'text-orange-700', bg: 'bg-orange-100', icon: Timer },
   resolved: { label: 'تم حل النزاع', color: 'text-success-700', bg: 'bg-success-100', icon: CheckCircle },
   refunded: { label: 'تم الاسترداد', color: 'text-slate-700', bg: 'bg-slate-200', icon: XCircle },
   completed: { label: 'مكتمل', color: 'text-success-700', bg: 'bg-success-100', icon: CheckCircle },
@@ -54,7 +54,6 @@ export default function OrdersPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
-  // Tick every 30 seconds to update countdown timers
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 30000);
     return () => clearInterval(t);
@@ -83,24 +82,19 @@ export default function OrdersPage() {
 
   const filtered = filter === 'all' ? orders : orders.filter((o) => o.status === filter);
 
-  const handleAccept = async (orderId: string) => {
-    setActionLoading(true);
-    setActionError(null);
-    const { error } = await supabase.rpc('accept_order', { p_order_id: orderId });
+  // دوال التحكم الجديدة المربوطة بـ RPC
+  const handleStart = async (orderId: string) => {
+    setActionLoading(true); setActionError(null);
+    const { error } = await supabase.rpc('start_order', { p_order_id: orderId });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     loadOrders();
   };
 
-  const handleComplete = async () => {
+  const handleDeliver = async () => {
     if (!showCompleteModal) return;
-    setActionLoading(true);
-    setActionError(null);
-    const { error } = await supabase.rpc('provider_complete_order', {
-      p_order_id: showCompleteModal,
-      p_note: completeNote || null,
-      p_evidence: [],
-    });
+    setActionLoading(true); setActionError(null);
+    const { error } = await supabase.rpc('deliver_order', { p_order_id: showCompleteModal });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     setShowCompleteModal(null);
@@ -108,10 +102,9 @@ export default function OrdersPage() {
     loadOrders();
   };
 
-  const handleConfirm = async (orderId: string) => {
-    setActionLoading(true);
-    setActionError(null);
-    const { error } = await supabase.rpc('customer_confirm_order', { p_order_id: orderId });
+  const handleAccept = async (orderId: string) => {
+    setActionLoading(true); setActionError(null);
+    const { error } = await supabase.rpc('accept_order', { p_order_id: orderId });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     loadOrders();
@@ -119,18 +112,8 @@ export default function OrdersPage() {
 
   const handleDispute = async () => {
     if (!showDisputeModal) return;
-    if (!disputeReason.trim() || !disputeDetails.trim()) {
-      setActionError('يرجى ملء جميع الحقول');
-      return;
-    }
-    setActionLoading(true);
-    setActionError(null);
-    const { error } = await supabase.rpc('open_dispute', {
-      p_order_id: showDisputeModal,
-      p_reason: disputeReason.trim(),
-      p_details: disputeDetails.trim(),
-      p_evidence: [],
-    });
+    setActionLoading(true); setActionError(null);
+    const { error } = await supabase.rpc('dispute_order', { p_order_id: showDisputeModal });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     setShowDisputeModal(null);
@@ -140,8 +123,7 @@ export default function OrdersPage() {
   };
 
   const handleCancel = async (orderId: string) => {
-    setActionLoading(true);
-    setActionError(null);
+    setActionLoading(true); setActionError(null);
     const { error } = await supabase.rpc('cancel_order', { p_order_id: orderId, p_reason: null });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
@@ -155,10 +137,7 @@ export default function OrdersPage() {
       .eq('listing_id', order.listing_id)
       .or(`and(user1_id.eq.${order.client_id},user2_id.eq.${order.provider_id}),and(user1_id.eq.${order.provider_id},user2_id.eq.${order.client_id})`)
       .maybeSingle();
-    if (existing) {
-      navigate(`/messages?conv=${existing.id}`);
-      return;
-    }
+    if (existing) { navigate(`/messages?conv=${existing.id}`); return; }
     const otherId = profile?.id === order.client_id ? order.provider_id : order.client_id;
     const { data: newConv } = await supabase
       .from('conversations')
@@ -193,7 +172,6 @@ export default function OrdersPage() {
           </div>
         )}
 
-        {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-1">
           {filterTabs.map((tab) => (
             <button
@@ -234,10 +212,11 @@ export default function OrdersPage() {
         ) : (
           <div className="space-y-3">
             {filtered.map((order) => {
-              const config = STATUS_CONFIG[order.status];
+              const config = STATUS_CONFIG[order.status] || STATUS_CONFIG['new'];
               const StatusIcon = config.icon;
               const isProvider = profile?.id === order.provider_id;
               const isClient = profile?.id === order.client_id;
+             const isAdmin = (profile as any)?.role === 'admin' || (profile as any)?.is_admin === true;
               const otherParty = isProvider ? order.client : order.provider;
 
               return (
@@ -270,9 +249,6 @@ export default function OrdersPage() {
                           {order.listing?.city && (
                             <span className="text-xs text-slate-400">{order.listing.city}</span>
                           )}
-                          <span className="text-xs text-slate-400">
-                            {new Date(order.created_at).toLocaleDateString('ar-EG')}
-                          </span>
                         </div>
                       </div>
                     </div>
@@ -284,169 +260,58 @@ export default function OrdersPage() {
                     </div>
                   </div>
 
-                  {/* Fee breakdown for provider */}
+                  {/* Fee breakdowns */}
                   {isProvider && order.status !== 'cancelled' && (
                     <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-                      <div>
-                        <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
-                        <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
-                        <p className="text-sm font-bold text-error-600">- {formatYER(order.provider_fee)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-slate-400">المستحق لك</p>
-                        <p className="text-sm font-bold text-success-600">{formatYER(order.provider_net)}</p>
-                      </div>
+                      <div><p className="text-[10px] text-slate-400">قيمة الخدمة</p><p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p></div>
+                      <div><p className="text-[10px] text-slate-400">رسوم مَهَرَة</p><p className="text-sm font-bold text-error-600">- {formatYER(order.provider_fee)}</p></div>
+                      <div><p className="text-[10px] text-slate-400">المستحق لك</p><p className="text-sm font-bold text-success-600">{formatYER(order.provider_net)}</p></div>
                     </div>
                   )}
 
-                  {/* Fee breakdown for client */}
                   {isClient && order.status !== 'cancelled' && (
                     <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-                      <div>
-                        <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
-                        <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
-                        <p className="text-sm font-bold text-accent-600">+ {formatYER(order.customer_fee)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-slate-400">الإجمالي</p>
-                        <p className="text-sm font-bold text-primary-600">{formatYER(order.customer_total)}</p>
-                      </div>
+                      <div><p className="text-[10px] text-slate-400">قيمة الخدمة</p><p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p></div>
+                      <div><p className="text-[10px] text-slate-400">رسوم مَهَرَة</p><p className="text-sm font-bold text-accent-600">+ {formatYER(order.customer_fee)}</p></div>
+                      <div><p className="text-[10px] text-slate-400">الإجمالي</p><p className="text-sm font-bold text-primary-600">{formatYER(order.customer_total)}</p></div>
                     </div>
                   )}
 
-                  {/* 48h countdown timer */}
-                  {order.status === 'awaiting_customer_confirmation' && order.confirmation_deadline && (
-                    <div className="mt-3 rounded-xl bg-orange-50 border border-orange-100 p-3">
-                      <div className="flex items-center gap-2 text-sm font-bold text-orange-700">
-                        <Timer size={16} className="animate-pulse" />
-                        {isClient
-                          ? 'تم إبلاغنا بأن الخدمة اكتملت. يرجى تأكيد الاستلام.'
-                          : 'بانتظار تأكيد العميل'}
-                      </div>
-                      <p className="text-xs text-orange-600 mt-1 font-medium">
-                        {formatTimeRemaining(order.confirmation_deadline)} لتأكيد الاستلام
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Completion note from provider */}
-                  {order.completion_note && order.status !== 'cancelled' && (
-                    <div className="mt-3 rounded-xl bg-accent-50 p-3">
-                      <p className="text-xs font-bold text-accent-700 mb-1">ملاحظة مقدم الخدمة:</p>
-                      <p className="text-sm text-slate-600">{order.completion_note}</p>
-                    </div>
-                  )}
-
-                  {/* Dispute info */}
-                  {order.status === 'disputed' && order.dispute && (
-                    <div className="mt-3 rounded-xl bg-error-50 border border-error-100 p-3">
-                      <div className="flex items-center gap-2 text-sm font-bold text-error-700 mb-1">
-                        <AlertTriangle size={16} />
-                        النزاع: {order.dispute.reason}
-                      </div>
-                      <p className="text-xs text-slate-600">{order.dispute.details}</p>
-                      {order.dispute.status !== 'open' && order.dispute.admin_resolution && (
-                        <p className="text-xs text-slate-500 mt-2 pt-2 border-t border-error-100">
-                          قرار الأدمن: {order.dispute.admin_resolution}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Cancel info */}
-                  {order.status === 'cancelled' && order.cancel_reason && (
-                    <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-500">
-                      سبب الإلغاء: {order.cancel_reason}
-                    </div>
-                  )}
-
-                  {/* Payment status */}
-                  {order.status !== 'cancelled' && (
-                    <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5">
-                        الدفع: {order.payment_status === 'not_connected' ? 'بانتظار ربط بوابة الدفع' : order.payment_status}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Action buttons */}
+                  {/* Action buttons with Admin Override */}
                   <div className="mt-3 flex items-center justify-between flex-wrap gap-2">
                     <button
                       onClick={() => handleContact(order)}
                       className="flex items-center gap-1 text-sm font-bold text-primary-600 hover:text-primary-700"
                     >
-                      <MessageSquare size={14} />
-                      مراسلة
+                      <MessageSquare size={14} /> مراسلة
                     </button>
 
                     <div className="flex gap-2 flex-wrap">
-                      {/* Provider: accept new order */}
-                      {isProvider && order.status === 'new' && (
-                        <>
-                          <button
-                            onClick={() => handleCancel(order.id)}
-                            disabled={actionLoading}
-                            className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs"
-                          >
-                            رفض
-                          </button>
-                          <button
-                            onClick={() => handleAccept(order.id)}
-                            disabled={actionLoading}
-                            className="btn-primary !px-3 !py-1.5 !text-xs"
-                          >
-                            قبول الطلب
-                          </button>
-                        </>
-                      )}
-
-                      {/* Provider: mark complete */}
-                      {isProvider && order.status === 'in_progress' && (
-                        <button
-                          onClick={() => setShowCompleteModal(order.id)}
-                          disabled={actionLoading}
-                          className="btn-primary !px-3 !py-1.5 !text-xs"
-                        >
-                          <CheckCircle size={14} />
-                          تم إنجاز الخدمة
+                      {(isProvider || isAdmin) && order.status === 'new' && (
+                        <button onClick={() => handleStart(order.id)} disabled={actionLoading} className="btn-primary !px-3 !py-1.5 !text-xs">
+                          <Play size={14} /> البدء بالتنفيذ
                         </button>
                       )}
 
-                      {/* Client: confirm or dispute */}
-                      {isClient && order.status === 'awaiting_customer_confirmation' && (
+                      {(isProvider || isAdmin) && order.status === 'in_progress' && (
+                        <button onClick={() => setShowCompleteModal(order.id)} disabled={actionLoading} className="btn-primary !px-3 !py-1.5 !text-xs">
+                          <CheckCircle size={14} /> تسليم العمل
+                        </button>
+                      )}
+
+                      {(isClient || isAdmin) && order.status === 'awaiting_customer_confirmation' && (
                         <>
-                          <button
-                            onClick={() => setShowDisputeModal(order.id)}
-                            disabled={actionLoading}
-                            className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs"
-                          >
-                            <AlertTriangle size={14} />
-                            لم أستلم / نزاع
+                          <button onClick={() => setShowDisputeModal(order.id)} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs">
+                            <AlertTriangle size={14} /> رفع شكوى
                           </button>
-                          <button
-                            onClick={() => handleConfirm(order.id)}
-                            disabled={actionLoading}
-                            className="btn-primary !bg-success-600 !px-3 !py-1.5 !text-xs"
-                          >
-                            <CheckCircle size={14} />
-                            تم الاستلام
+                          <button onClick={() => handleAccept(order.id)} disabled={actionLoading} className="btn-primary !bg-success-600 !px-3 !py-1.5 !text-xs">
+                            <CheckCircle size={14} /> تأكيد الاستلام
                           </button>
                         </>
                       )}
-
-                      {/* Client: cancel new order */}
-                      {isClient && order.status === 'new' && (
-                        <button
-                          onClick={() => handleCancel(order.id)}
-                          disabled={actionLoading}
-                          className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs"
-                        >
+                      
+                      {(isClient || isAdmin) && order.status === 'new' && (
+                        <button onClick={() => handleCancel(order.id)} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs">
                           إلغاء الطلب
                         </button>
                       )}
@@ -459,74 +324,20 @@ export default function OrdersPage() {
         )}
       </div>
 
-      {/* Dispute modal */}
+      {/* نوافذ الشكاوى والتسليم (Modals) */}
       {showDisputeModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setShowDisputeModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100">
-                <AlertTriangle size={20} className="text-error-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-black text-slate-800">فتح نزاع</h3>
-                <p className="text-xs text-slate-500">سيتم مراجعة النزاع من قبل الإدارة</p>
-              </div>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100"><AlertTriangle size={20} className="text-error-600" /></div>
+              <div><h3 className="text-lg font-black text-slate-800">فتح نزاع</h3><p className="text-xs text-slate-500">سيتم مراجعة النزاع وإيقاف تحويل الرصيد</p></div>
             </div>
-
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">سبب النزاع *</label>
-                <select
-                  value={disputeReason}
-                  onChange={(e) => setDisputeReason(e.target.value)}
-                  className="input-field"
-                >
-                  <option value="">اختر السبب...</option>
-                  <option value="لم أستلم الخدمة">لم أستلم الخدمة</option>
-                  <option value="جودة الخدمة غير مطابقة">جودة الخدمة غير مطابقة</option>
-                  <option value="تأخر في التسليم">تأخر في التسليم</option>
-                  <option value="خدمة مختلفة عما تم الاتفاق عليه">خدمة مختلفة عما تم الاتفاق عليه</option>
-                  <option value="أخرى">أخرى</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">تفاصيل المشكلة *</label>
-                <textarea
-                  value={disputeDetails}
-                  onChange={(e) => setDisputeDetails(e.target.value)}
-                  placeholder="اشرح بالتفصيل ما حدث..."
-                  rows={4}
-                  className="input-field resize-none"
-                  maxLength={1000}
-                />
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-500 flex items-center gap-2">
-                  <ImageIcon size={14} className="text-slate-400" />
-                  إرفاق الأدلة (صور/ملفات) سيتوفر قريباً
-                </p>
-              </div>
-              {actionError && (
-                <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>
-              )}
+              {actionError && <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>}
               <div className="flex gap-2">
-                <button
-                  onClick={() => { setShowDisputeModal(null); setDisputeReason(''); setDisputeDetails(''); setActionError(null); }}
-                  disabled={actionLoading}
-                  className="btn-ghost flex-1 !bg-slate-100"
-                >
-                  إلغاء
-                </button>
-                <button
-                  onClick={handleDispute}
-                  disabled={actionLoading}
-                  className="btn-primary flex-1 !bg-error-600"
-                >
-                  {actionLoading ? (
-                    <span className="flex items-center gap-2"><Loader2 size={16} className="animate-spin" /> جاري...</span>
-                  ) : (
-                    <span className="flex items-center gap-2"><Shield size={16} /> فتح النزاع</span>
-                  )}
+                <button onClick={() => setShowDisputeModal(null)} disabled={actionLoading} className="btn-ghost flex-1 !bg-slate-100">إلغاء</button>
+                <button onClick={handleDispute} disabled={actionLoading} className="btn-primary flex-1 !bg-error-600">
+                  {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />} تأكيد الشكوى
                 </button>
               </div>
             </div>
@@ -534,59 +345,20 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* Complete modal */}
       {showCompleteModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setShowCompleteModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100">
-                <CheckCircle size={20} className="text-success-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-black text-slate-800">تأكيد إنجاز الخدمة</h3>
-                <p className="text-xs text-slate-500">سيبدأ عداد 48 ساعة لتأكيد العميل</p>
-              </div>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100"><CheckCircle size={20} className="text-success-600" /></div>
+              <div><h3 className="text-lg font-black text-slate-800">تسليم العمل</h3><p className="text-xs text-slate-500">سيبدأ عداد 24 ساعة لتأكيد العميل</p></div>
             </div>
-
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">ملاحظات الإنجاز (اختياري)</label>
-                <textarea
-                  value={completeNote}
-                  onChange={(e) => setCompleteNote(e.target.value)}
-                  placeholder="أضف تفاصيل عن ما تم إنجازه..."
-                  rows={3}
-                  className="input-field resize-none"
-                  maxLength={500}
-                />
-              </div>
-              <div className="rounded-xl bg-orange-50 p-3">
-                <p className="text-xs text-orange-700">
-                  بعد التأكيد سيكون لدى العميل 48 ساعة لتأكيد الاستلام أو فتح نزاع.
-                  إذا لم يرد العميل خلال 48 ساعة، يصبح الطلب مؤهلاً للتسوية.
-                </p>
-              </div>
-              {actionError && (
-                <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>
-              )}
+              <div className="rounded-xl bg-orange-50 p-3 text-xs text-orange-700">إذا لم يؤكد العميل خلال 24 ساعة، سيتم تحرير الرصيد لمحفظتك تلقائياً.</div>
+              {actionError && <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>}
               <div className="flex gap-2">
-                <button
-                  onClick={() => { setShowCompleteModal(null); setCompleteNote(''); setActionError(null); }}
-                  disabled={actionLoading}
-                  className="btn-ghost flex-1 !bg-slate-100"
-                >
-                  إلغاء
-                </button>
-                <button
-                  onClick={handleComplete}
-                  disabled={actionLoading}
-                  className="btn-primary flex-1 !bg-success-600"
-                >
-                  {actionLoading ? (
-                    <span className="flex items-center gap-2"><Loader2 size={16} className="animate-spin" /> جاري...</span>
-                  ) : (
-                    <span className="flex items-center gap-2"><CheckCircle size={16} /> تأكيد الإنجاز</span>
-                  )}
+                <button onClick={() => setShowCompleteModal(null)} disabled={actionLoading} className="btn-ghost flex-1 !bg-slate-100">إلغاء</button>
+                <button onClick={handleDeliver} disabled={actionLoading} className="btn-primary flex-1 !bg-success-600">
+                  {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />} تأكيد التسليم
                 </button>
               </div>
             </div>
