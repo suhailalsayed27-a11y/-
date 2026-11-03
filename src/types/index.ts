@@ -2,12 +2,43 @@ export type AccountType = 'provider' | 'client' | 'both';
 export type ProviderStatus = 'pending' | 'approved' | 'rejected';
 export type ListingStatus = 'pending' | 'published' | 'hidden' | 'rejected';
 export type OrderStatus =
-  | 'new' | 'pending_payment' | 'paid' | 'waiting_for_provider' | 'accepted' | 'in_progress' | 'provider_completed' | 'awaiting_customer_confirmation'
-  | 'completed_by_customer' | 'protection_period' | 'completed' | 'cancelled' | 'disputed' | 'resolved' | 'confirmation_expired' | 'refunded';
+  | 'new'
+  | 'pending_payment'
+  | 'paid'
+  | 'waiting_for_provider'
+  | 'accepted'
+  | 'in_progress'
+  | 'provider_completed'
+  | 'awaiting_customer_confirmation'
+  | 'completed_by_customer'
+  | 'protection_period'
+  | 'completed'
+  | 'cancelled'
+  | 'disputed'
+  | 'resolved'
+  | 'confirmation_expired'
+  | 'refunded';
 
-export type PaymentStatus = 'not_connected' | 'pending' | 'processing' | 'paid' | 'failed' | 'refunded' | 'partially_refunded' | 'disputed' | 'cancelled';
+export type PaymentStatus =
+  | 'not_connected'
+  | 'pending'
+  | 'processing'
+  | 'paid'
+  | 'failed'
+  | 'refunded'
+  | 'partially_refunded'
+  | 'disputed'
+  | 'cancelled';
+
 export type CancelledBy = 'client' | 'provider' | 'admin';
-export type DisputeStatus = 'open' | 'under_review' | 'resolved_customer' | 'resolved_provider' | 'resolved_partial';
+export type DisputeStatus =
+  | 'open'
+  | 'under_review'
+  | 'resolved_customer'
+  | 'resolved_provider'
+  | 'resolved_partial'
+  | 'resolved'
+  | 'closed';
 
 export interface Profile {
   id: string;
@@ -51,6 +82,13 @@ export interface City {
   sort_order: number;
 }
 
+export interface ListingImage {
+  id: string;
+  listing_id: string;
+  image_url: string;
+  sort_order: number;
+}
+
 export interface Listing {
   id: string;
   provider_id: string;
@@ -72,26 +110,30 @@ export interface Listing {
   images?: ListingImage[];
 }
 
-export interface ListingImage {
-  id: string;
-  listing_id: string;
-  image_url: string;
-  sort_order: number;
-}
-
 export interface Dispute {
   id: string;
   order_id: string;
   opened_by: string;
   reason: string;
   details: string;
-  evidence_urls: string[];
+  evidence_urls?: string[];
   status: DisputeStatus;
   admin_resolution: string | null;
-  resolved_by: string | null;
-  resolved_at: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
+}
+
+export interface OrderLog {
+  id: string;
+  order_id: string;
+  actor_id?: string | null;
+  status_from?: string | null;
+  status_to: string;
+  title: string;
+  description?: string | null;
+  created_at: string;
 }
 
 export interface Order {
@@ -131,6 +173,7 @@ export interface Order {
   client?: Profile;
   provider?: Profile;
   dispute?: Dispute;
+  logs?: OrderLog[];
 }
 
 export interface Review {

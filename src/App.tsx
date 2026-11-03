@@ -9,6 +9,7 @@ import ServicesPage from '@/pages/ServicesPage';
 import ListingDetailPage from '@/pages/ListingDetailPage';
 import AddSkillPage from '@/pages/AddSkillPage';
 import OrdersPage from '@/pages/OrdersPage';
+import OrderDetailPage from '@/pages/OrderDetailPage'; // صفحة تفاصيل ومتابعة الطلب
 import MessagesPage from '@/pages/MessagesPage';
 import NotificationsPage from '@/pages/NotificationsPage';
 import ProfilePage from '@/pages/ProfilePage';
@@ -67,11 +68,11 @@ export default function App() {
   const handleOnboardingComplete = () => {
     localStorage.setItem('mahrah_onboarded', 'true');
     setShowOnboarding(false);
-    // التوجيه فوراً لصفحة التسجيل بدلاً من الرئيسية (كما طلبت)
+    // التوجيه فوراً لصفحة التسجيل بدلاً من الرئيسية
     navigate('/auth/signup', { replace: true });
   };
 
-  // إخفاء الشاشة لحظياً ريثما يتم التحقق من بيانات الدخول لمنع "الوميض" أو ظهور صفحات بالخطأ
+  // إخفاء الشاشة لحظياً ريثما يتم التحقق من بيانات الدخول لمنع الوميض
   if (isChecking || loading) {
     return null; 
   }
@@ -103,6 +104,7 @@ export default function App() {
           <Route path="/listings/:id" element={<ListingDetailPage />} />
           <Route path="/add-skill" element={<AddSkillPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/orders/:id" element={<OrderDetailPage />} /> {/* مسار متابعة الطلب المستقل */}
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/profile" element={<ProfilePage />} />

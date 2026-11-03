@@ -63,7 +63,7 @@ export default function MessagesPage() {
     loadConversations();
   }, [loadConversations]);
 
-  // تفعيل الاستماع الفوري (Realtime) للرسائل الجديدة بدلاً من التحديث المزعج (Polling)
+  // تفعيل الاستماع الفوري (Realtime) للرسائل الجديدة
   useEffect(() => {
     if (!profile) return;
 
@@ -75,20 +75,17 @@ export default function MessagesPage() {
         (payload) => {
           const newMsg = payload.new as Message;
           
-          // إذا كانت الرسالة تخص المحادثة المفتوحة حالياً، نعرضها فوراً
           if (selectedId === newMsg.conversation_id) {
             setMessages((prev) => {
               if (prev.find((m) => m.id === newMsg.id)) return prev;
               return [...prev, newMsg];
             });
             
-            // تحديد الرسالة كمقروءة فور وصولها إذا كنت داخل المحادثة
             if (newMsg.sender_id !== profile.id) {
               supabase.from('messages').update({ read_at: new Date().toISOString() }).eq('id', newMsg.id).then();
             }
           }
           
-          // تحديث قائمة المحادثات لظهور الإشعارات والرسالة الأخيرة
           loadConversations();
         }
       )
@@ -106,11 +103,12 @@ export default function MessagesPage() {
     }
   }, [searchParams, conversations]);
 
+  // تعديل استعلام جلب الرسائل ليشمل بيانات الراسل (profiles)
   const loadMessages = useCallback(async (convId: string) => {
     setLoadingMessages(true);
     const { data } = await supabase
       .from('messages')
-      .select('*')
+      .select('*, sender:profiles!messages_sender_id_fkey(id, full_name, avatar_url)')
       .eq('conversation_id', convId)
       .order('created_at', { ascending: true });
     setMessages((data as Message[]) || []);
@@ -121,7 +119,6 @@ export default function MessagesPage() {
     if (!selectedId || !profile) return;
     loadMessages(selectedId);
 
-    // جعل الرسائل مقروءة عند فتح المحادثة
     supabase
       .from('messages')
       .update({ read_at: new Date().toISOString() })
@@ -132,7 +129,6 @@ export default function MessagesPage() {
 
   }, [selectedId, profile, loadMessages, loadConversations]);
 
-  // نزول الشاشة التلقائي لآخر رسالة
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -150,11 +146,10 @@ export default function MessagesPage() {
         sender_id: profile.id,
         body,
       })
-      .select('*')
+      .select('*, sender:profiles!messages_sender_id_fkey(id, full_name, avatar_url)')
       .single();
 
     if (data) {
-      // تتم الإضافة للمصفوفة لتظهر بسرعة للمستخدم المرسل
       setMessages((prev) => [...prev, data as Message]);
       await supabase
         .from('conversations')
@@ -280,7 +275,7 @@ export default function MessagesPage() {
               </div>
             </div>
 
-            {/* شاشة المحادثة (تصميم واتساب) */}
+            {/* شاشة المحادثة */}
             {selectedId ? (
               <div className="flex flex-1 flex-col bg-[#efeae2]">
                 {/* رأس المحادثة */}
@@ -325,6 +320,8 @@ export default function MessagesPage() {
                   ) : (
                     messages.map((msg) => {
                       const isMine = msg.sender_id === profile.id;
+                      const senderName = (msg as any).sender?.full_name || (isMine ? profile.full_name : otherUser?.full_name) || 'مستخدم';
+
                       return (
                         <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                           <div
@@ -334,6 +331,12 @@ export default function MessagesPage() {
                                 : 'bg-white text-slate-900 rounded-2xl rounded-tr-sm'
                             }`}
                           >
+                            {/* عرض اسم الراسل فوق فقاعة الرسالة */}
+                            {!isMine && (
+                              <span className="text-[11px] font-bold text-primary-600 mb-1 block select-none">
+                                {senderName}
+                              </span>
+                            )}
                             <p className="leading-relaxed whitespace-pre-wrap break-words">{msg.body}</p>
                             <div className="flex items-center justify-end gap-1 mt-0.5 float-left mr-3">
                               <span className="text-[10px] text-slate-500">
@@ -341,7 +344,6 @@ export default function MessagesPage() {
                               </span>
                               {isMine && <CheckCheck size={14} className={msg.read_at ? 'text-sky-500' : 'text-slate-400'} />}
                             </div>
-                            {/* Clear float */}
                             <div className="clear-both"></div>
                           </div>
                         </div>

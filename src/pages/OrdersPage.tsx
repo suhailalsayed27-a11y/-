@@ -216,7 +216,7 @@ export default function OrdersPage() {
               const StatusIcon = config.icon;
               const isProvider = profile?.id === order.provider_id;
               const isClient = profile?.id === order.client_id;
-             const isAdmin = (profile as any)?.role === 'admin' || (profile as any)?.is_admin === true;
+              const isAdmin = (profile as any)?.is_admin === true || (profile as any)?.role === 'admin';
               const otherParty = isProvider ? order.client : order.provider;
 
               return (
@@ -263,17 +263,35 @@ export default function OrdersPage() {
                   {/* Fee breakdowns */}
                   {isProvider && order.status !== 'cancelled' && (
                     <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-                      <div><p className="text-[10px] text-slate-400">قيمة الخدمة</p><p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p></div>
-                      <div><p className="text-[10px] text-slate-400">رسوم مَهَرَة</p><p className="text-sm font-bold text-error-600">- {formatYER(order.provider_fee)}</p></div>
-                      <div><p className="text-[10px] text-slate-400">المستحق لك</p><p className="text-sm font-bold text-success-600">{formatYER(order.provider_net)}</p></div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
+                        <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
+                        <p className="text-sm font-bold text-error-600">{formatYER(order.provider_fee)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">المستحق لك</p>
+                        <p className="text-sm font-bold text-success-600">{formatYER(order.provider_net)}</p>
+                      </div>
                     </div>
                   )}
 
                   {isClient && order.status !== 'cancelled' && (
                     <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-                      <div><p className="text-[10px] text-slate-400">قيمة الخدمة</p><p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p></div>
-                      <div><p className="text-[10px] text-slate-400">رسوم مَهَرَة</p><p className="text-sm font-bold text-accent-600">+ {formatYER(order.customer_fee)}</p></div>
-                      <div><p className="text-[10px] text-slate-400">الإجمالي</p><p className="text-sm font-bold text-primary-600">{formatYER(order.customer_total)}</p></div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
+                        <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
+                        <p className="text-sm font-bold text-accent-600">+ {formatYER(order.customer_fee)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-slate-400">الإجمالي</p>
+                        <p className="text-sm font-bold text-primary-600">{formatYER(order.customer_total)}</p>
+                      </div>
                     </div>
                   )}
 
