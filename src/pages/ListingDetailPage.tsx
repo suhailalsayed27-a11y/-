@@ -104,7 +104,7 @@ export default function ListingDetailPage() {
     }
 
     setOrderStatus({ type: 'loading' });
-    const { error } = await supabase.rpc('create_order', {
+    const { data, error } = await supabase.rpc('create_order', {
       p_listing_id: listing.id,
       p_notes: orderNotes || null,
     });
@@ -113,15 +113,20 @@ export default function ListingDetailPage() {
       setOrderStatus({ type: 'error', msg: error.message });
     } else {
       setOrderStatus({ type: 'success' });
-      // نحدث الرصيد محلياً للواجهة
       setWalletBalance(prev => prev !== null ? prev - fees.customer_total : 0);
       
       setTimeout(() => {
         setShowOrderModal(false);
         setOrderStatus({ type: 'idle' });
         setOrderNotes('');
-        navigate('/orders');
-      }, 2000);
+        
+        // التوجيه الذكي إلى صفحة الطلب المستقلة الجديدة
+        if (data) {
+          navigate(`/orders/${data}`);
+        } else {
+          navigate('/orders'); // بديل احتياطي إذا لم يُرجع السيرفر المعرف
+        }
+      }, 1500); // قللت الوقت قليلاً لتسريع الانتقال بعد الدفع
     }
   };
 
@@ -328,7 +333,7 @@ export default function ListingDetailPage() {
               ) : (
                 <>
                   <h3 className="text-lg font-black text-slate-800 mb-1">ملخص الدفع والطلب</h3>
-                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} • {providerName}</p>
+                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} - {providerName}</p>
                   
                   <div className="space-y-4">
                     <div>

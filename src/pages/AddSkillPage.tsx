@@ -92,7 +92,7 @@ export default function AddSkillPage() {
         price: Number(price),
         experience,
         city,
-        status: 'pending', // الخدمة تذهب للمراجعة أولاً
+        status: 'published', // تم التعديل لتنشر الخدمة فوراً دون مراجعة
       })
       .select()
       .single();
@@ -133,8 +133,8 @@ export default function AddSkillPage() {
           <div className="flex h-20 w-20 mx-auto items-center justify-center rounded-full bg-success-100 mb-4">
             <CheckCircle size={44} className="text-success-600" />
           </div>
-          <h2 className="text-xl font-black text-slate-800 mb-2">تم إرسال خدمتك بنجاح!</h2>
-          <p className="text-slate-500">سيتم مراجعتها من قبل الإدارة والموافقة عليها قريباً...</p>
+          <h2 className="text-xl font-black text-slate-800 mb-2">تم نشر خدمتك بنجاح!</h2>
+          <p className="text-slate-500">خدمتك الآن متاحة للعملاء في المنصة وتقبل الطلبات.</p>
         </div>
       </div>
     );
