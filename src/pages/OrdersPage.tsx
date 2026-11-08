@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Inbox, Clock, CheckCircle, XCircle, Loader2, AlertTriangle,
-  Timer, MessageSquare, Shield, X, Image as ImageIcon, Play, type LucideIcon,
+  Timer, MessageSquare, Shield, X, Play, ShieldAlert,
+  type LucideIcon, LayoutList
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,17 +28,6 @@ const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; bg: str
   disputed: { label: 'نزاع', color: 'text-error-700', bg: 'bg-error-100', icon: AlertTriangle },
   confirmation_expired: { label: 'انتهت مهلة التأكيد', color: 'text-slate-700', bg: 'bg-slate-200', icon: Clock },
 };
-
-function formatTimeRemaining(deadline: string): string {
-  const now = new Date().getTime();
-  const end = new Date(deadline).getTime();
-  const diff = end - now;
-  if (diff <= 0) return 'انتهت المهلة';
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-  if (hours > 0) return `متبقي ${hours} ساعة و${minutes} دقيقة`;
-  return `متبقي ${minutes} دقيقة`;
-}
 
 export default function OrdersPage() {
   const { profile, session, loading } = useAuth();
@@ -67,20 +57,51 @@ export default function OrdersPage() {
 
   const loadOrders = useCallback(async () => {
     if (!profile) return;
-    const { data } = await supabase
-      .from('orders')
-      .select('*, listing:listings(*, category:categories(*)), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*), dispute:disputes(*)')
-      .or(`client_id.eq.${profile.id},provider_id.eq.${profile.id}`)
-      .order('created_at', { ascending: false });
-    setOrders((data as Order[]) || []);
-    setLoadingOrders(false);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          listing:listings(*, category:categories(*)),
+          client:client_id(*),
+          provider:provider_id(*),
+          dispute:disputes(*)
+        `)
+        .or(`client_id.eq.${profile.id},provider_id.eq.${profile.id}`)
+        .order('created_at', { ascending: false });
+        
+      if (error) throw error;
+      setOrders((data as unknown as Order[]) || []);
+    } catch (err: any) {
+      console.error('Error loading orders:', err.message);
+    } finally {
+      setLoadingOrders(false);
+    }
   }, [profile]);
 
   useEffect(() => {
     loadOrders();
   }, [loadOrders]);
 
-  const filtered = filter === 'all' ? orders : orders.filter((o) => o.status === filter);
+  // تحديث فلاتر الحالات لدمج الحالات المترادفة
+  const filtered = orders.filter((o) => {
+    if (filter === 'all') return true;
+    
+    // دمج حالات الطلب الجديد للظهور تحت تصنيف "جديدة"
+    if (filter === 'new') {
+      return ['new', 'pending_payment', 'paid', 'waiting_for_provider'].includes(o.status);
+    }
+    // دمج حالات التنفيذ للظهور تحت "قيد التنفيذ"
+    if (filter === 'in_progress') {
+      return ['accepted', 'in_progress'].includes(o.status);
+    }
+    // دمج حالات الانتهاء للظهور تحت "مكتملة"
+    if (filter === 'completed') {
+      return ['completed', 'completed_by_customer', 'resolved'].includes(o.status);
+    }
+    
+    return o.status === filter;
+  });
 
   // دوال التحكم الجديدة المربوطة بـ RPC
   const handleStart = async (orderId: string) => {
@@ -160,10 +181,10 @@ export default function OrdersPage() {
   ];
 
   return (
-    <div className="pb-20 md:pb-8">
+    <div className="pb-24 md:pb-12 min-h-screen relative">
       <div className="mx-auto max-w-4xl px-4 py-6">
         <h1 className="text-2xl font-black text-slate-800 mb-1">الطلبات</h1>
-        <p className="text-slate-500 mb-6">إدارة طلبات الخدمات الخاصة بك</p>
+        <p className="text-slate-500 mb-6">إدارة طلبات الخدمات الخاصة بك كمقدم خدمة أو عميل</p>
 
         {actionError && (
           <div className="mb-4 rounded-xl bg-error-50 px-4 py-3 text-sm text-error-700 flex items-center justify-between">
@@ -173,22 +194,32 @@ export default function OrdersPage() {
         )}
 
         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-1">
-          {filterTabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setFilter(tab.key)}
-              className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
-                filter === tab.key ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {tab.label}
-              {tab.key !== 'all' && (
-                <span className="mr-1.5 text-xs opacity-75">
-                  ({orders.filter((o) => o.status === tab.key).length})
-                </span>
-              )}
-            </button>
-          ))}
+          {filterTabs.map((tab) => {
+            // Count logic based on merged statuses
+            let count = 0;
+            if (tab.key === 'all') count = orders.length;
+            else if (tab.key === 'new') count = orders.filter(o => ['new', 'pending_payment', 'paid', 'waiting_for_provider'].includes(o.status)).length;
+            else if (tab.key === 'in_progress') count = orders.filter(o => ['accepted', 'in_progress'].includes(o.status)).length;
+            else if (tab.key === 'completed') count = orders.filter(o => ['completed', 'completed_by_customer', 'resolved'].includes(o.status)).length;
+            else count = orders.filter(o => o.status === tab.key).length;
+
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setFilter(tab.key)}
+                className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+                  filter === tab.key ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {tab.label}
+                {tab.key !== 'all' && (
+                  <span className="mr-1.5 text-xs opacity-75">
+                    ({count})
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {loadingOrders ? (
@@ -206,7 +237,7 @@ export default function OrdersPage() {
               <Inbox size={32} className="text-slate-400" />
             </div>
             <h3 className="text-lg font-bold text-slate-700 mb-1">لا توجد طلبات</h3>
-            <p className="text-sm text-slate-400 mb-4">ليس لديك طلبات في هذه الحالة</p>
+            <p className="text-sm text-slate-400 mb-4">ليس لديك طلبات في هذه الحالة حالياً</p>
             <Link to="/services" className="btn-primary">تصفح الخدمات</Link>
           </div>
         ) : (
@@ -220,26 +251,26 @@ export default function OrdersPage() {
               const otherParty = isProvider ? order.client : order.provider;
 
               return (
-                <div key={order.id} className="card p-5">
+                <div key={order.id} className="card p-5 cursor-pointer hover:border-primary-200 transition-colors" onClick={() => navigate(`/orders/${order.id}`)}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 flex-1 min-w-0">
                       {otherParty?.avatar_url ? (
                         <img
                           src={otherParty.avatar_url}
                           alt={otherParty.full_name}
-                          className="h-12 w-12 rounded-xl object-cover shrink-0"
+                          className="h-12 w-12 rounded-xl object-cover shrink-0 border border-slate-100"
                           onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }}
                         />
                       ) : null}
-                      <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-primary-100 text-lg font-bold text-primary-700 shrink-0 ${otherParty?.avatar_url ? 'hidden' : ''}`}>
+                      <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-primary-100 text-lg font-bold text-primary-700 shrink-0 border border-primary-50 ${otherParty?.avatar_url ? 'hidden' : ''}`}>
                         {otherParty?.full_name?.charAt(0) || '?'}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <Link to={`/listings/${order.listing_id}`} className="font-bold text-slate-800 hover:text-primary-600 transition-colors block truncate">
-                          {order.listing?.service_name || 'خدمة'}
+                        <Link to={`/listings/${order.listing_id}`} onClick={(e) => e.stopPropagation()} className="font-bold text-slate-800 hover:text-primary-600 transition-colors block truncate">
+                          {order.listing?.service_name || 'خدمة مهارة'}
                         </Link>
                         <p className="text-sm text-slate-500 truncate">
-                          {isProvider ? 'من' : 'إلى'}: {otherParty?.full_name}
+                          {isProvider ? 'من العميل' : 'مقدم الخدمة'}: <span className="font-bold text-slate-600">{otherParty?.full_name}</span>
                         </p>
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           <span className={`badge ${config.bg} ${config.color}`}>
@@ -249,6 +280,7 @@ export default function OrdersPage() {
                           {order.listing?.city && (
                             <span className="text-xs text-slate-400">{order.listing.city}</span>
                           )}
+                          <span className="text-xs font-mono text-slate-400">#{order.id.slice(0, 6)}</span>
                         </div>
                       </div>
                     </div>
@@ -262,14 +294,14 @@ export default function OrdersPage() {
 
                   {/* Fee breakdowns */}
                   {isProvider && order.status !== 'cancelled' && (
-                    <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
+                    <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 border border-slate-100 p-3 text-center">
                       <div>
                         <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
                         <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
-                        <p className="text-sm font-bold text-error-600">{formatYER(order.provider_fee)}</p>
+                        <p className="text-sm font-bold text-error-600">- {formatYER(order.provider_fee)}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-400">المستحق لك</p>
@@ -279,7 +311,7 @@ export default function OrdersPage() {
                   )}
 
                   {isClient && order.status !== 'cancelled' && (
-                    <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
+                    <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 border border-slate-100 p-3 text-center">
                       <div>
                         <p className="text-[10px] text-slate-400">قيمة الخدمة</p>
                         <p className="text-sm font-bold text-slate-700">{formatYER(order.service_price)}</p>
@@ -295,42 +327,39 @@ export default function OrdersPage() {
                     </div>
                   )}
 
-                  {/* Action buttons with Admin Override */}
-                  <div className="mt-3 flex items-center justify-between flex-wrap gap-2">
+                  {/* Action buttons */}
+                  <div className="mt-4 flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-slate-50">
                     <button
-                      onClick={() => handleContact(order)}
-                      className="flex items-center gap-1 text-sm font-bold text-primary-600 hover:text-primary-700"
+                      onClick={(e) => { e.stopPropagation(); handleContact(order); }}
+                      className="flex items-center gap-1.5 text-sm font-bold text-primary-600 hover:text-primary-700 bg-primary-50 px-3 py-1.5 rounded-lg transition-colors"
                     >
                       <MessageSquare size={14} /> مراسلة
                     </button>
 
                     <div className="flex gap-2 flex-wrap">
-                      {(isProvider || isAdmin) && order.status === 'new' && (
-                        <button onClick={() => handleStart(order.id)} disabled={actionLoading} className="btn-primary !px-3 !py-1.5 !text-xs">
-                          <Play size={14} /> البدء بالتنفيذ
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); navigate(`/orders/${order.id}`); }}
+                        className="btn-ghost !bg-slate-100 !text-slate-700 !px-4 !py-1.5 !text-xs font-bold flex items-center gap-1.5"
+                      >
+                        <LayoutList size={14} /> تتبع الطلب
+                      </button>
+
+                      {/* Quick Actions based on status */}
+                      {(isProvider || isAdmin) && (order.status === 'new' || order.status === 'paid') && (
+                        <button onClick={(e) => { e.stopPropagation(); handleStart(order.id); }} disabled={actionLoading} className="btn-primary !px-4 !py-1.5 !text-xs shadow-sm">
+                          <Play size={14} /> قبول والبدء
                         </button>
                       )}
 
                       {(isProvider || isAdmin) && order.status === 'in_progress' && (
-                        <button onClick={() => setShowCompleteModal(order.id)} disabled={actionLoading} className="btn-primary !px-3 !py-1.5 !text-xs">
+                        <button onClick={(e) => { e.stopPropagation(); setShowCompleteModal(order.id); }} disabled={actionLoading} className="btn-primary !bg-success-600 !px-4 !py-1.5 !text-xs shadow-sm">
                           <CheckCircle size={14} /> تسليم العمل
                         </button>
                       )}
 
-                      {(isClient || isAdmin) && order.status === 'awaiting_customer_confirmation' && (
-                        <>
-                          <button onClick={() => setShowDisputeModal(order.id)} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs">
-                            <AlertTriangle size={14} /> رفع شكوى
-                          </button>
-                          <button onClick={() => handleAccept(order.id)} disabled={actionLoading} className="btn-primary !bg-success-600 !px-3 !py-1.5 !text-xs">
-                            <CheckCircle size={14} /> تأكيد الاستلام
-                          </button>
-                        </>
-                      )}
-                      
-                      {(isClient || isAdmin) && order.status === 'new' && (
-                        <button onClick={() => handleCancel(order.id)} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-1.5 !text-xs">
-                          إلغاء الطلب
+                      {(isClient || isAdmin) && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
+                        <button onClick={(e) => { e.stopPropagation(); handleAccept(order.id); }} disabled={actionLoading} className="btn-primary !bg-success-600 !px-4 !py-1.5 !text-xs shadow-sm">
+                          <CheckCircle size={14} /> تأكيد الاستلام
                         </button>
                       )}
                     </div>
@@ -340,6 +369,27 @@ export default function OrdersPage() {
             })}
           </div>
         )}
+      </div>
+
+      {/* Floating Action Buttons (Bottom Left) */}
+      <div className="fixed bottom-20 md:bottom-8 left-4 flex flex-col gap-3 z-40">
+        {/* زر التتبع */}
+        <button 
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="group flex items-center gap-2 bg-white text-slate-700 border border-slate-200 shadow-lg px-4 py-3 rounded-full hover:bg-slate-50 transition-all active:scale-95"
+        >
+          <span className="text-sm font-bold hidden sm:block group-hover:block whitespace-nowrap pr-1">تتبع طلباتي</span>
+          <LayoutList size={20} className="text-primary-600" />
+        </button>
+
+        {/* زر النزاعات */}
+        <button 
+          onClick={() => setFilter('disputed')}
+          className="group flex items-center gap-2 bg-error-50 text-error-700 border border-error-100 shadow-lg px-4 py-3 rounded-full hover:bg-error-100 transition-all active:scale-95"
+        >
+          <span className="text-sm font-bold hidden sm:block group-hover:block whitespace-nowrap pr-1">النزاعات والشكاوى</span>
+          <ShieldAlert size={20} className="text-error-600" />
+        </button>
       </div>
 
       {/* نوافذ الشكاوى والتسليم (Modals) */}

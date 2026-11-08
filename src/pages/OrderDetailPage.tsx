@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Clock, CheckCircle2, ShieldAlert, AlertTriangle, Loader2,
-  ArrowRight, MessageSquare, Shield, Check, FileText, User, Store,
-  Banknote, Calendar, ChevronLeft, AlertCircle, XCircle
+  ArrowRight, MessageSquare, Shield, Check, User,
+  Banknote, Calendar, AlertCircle, XCircle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,7 +11,7 @@ import { formatYER } from '@/lib/commission';
 import type { Order, OrderStatus, OrderLog } from '@/types';
 
 // مراحل تقدم الطلب
-const PROGRESS_STEPS: { status: OrderStatus; label: string }[] = [
+const PROGRESS_STEPS: { status: string; label: string }[] = [
   { status: 'new', label: 'تم طلب الخدمة' },
   { status: 'in_progress', label: 'جاري التنفيذ' },
   { status: 'awaiting_customer_confirmation', label: 'بانتظار التأكيد' },
@@ -63,28 +63,15 @@ export default function OrderDetailPage() {
     }
   }, [id]);
 
-  // الاشتراك التلقائي في المزامنة اللحظية (Realtime Subscription)
+  // الاشتراك التلقائي في المزامنة اللحظية
   useEffect(() => {
     fetchOrderData();
-
     if (!id) return;
 
     const channel = supabase
       .channel(`realtime-order-${id}`)
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` },
-        () => {
-          fetchOrderData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'order_logs', filter: `order_id=eq.${id}` },
-        () => {
-          fetchOrderData();
-        }
-      )
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` }, () => fetchOrderData())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_logs', filter: `order_id=eq.${id}` }, () => fetchOrderData())
       .subscribe();
 
     return () => {
@@ -116,26 +103,31 @@ export default function OrderDetailPage() {
   const isProvider = profile.id === order.provider_id;
   const isAdmin = profile.is_admin === true || (profile as any)?.role === 'admin';
 
-  // حساب درجة التقدم الشريطية
-  const getStepStatus = (stepStatus: OrderStatus) => {
-    const orderStatusOrder = ['new', 'accepted', 'in_progress', 'awaiting_customer_confirmation', 'completed'];
-    const currentIndex = orderStatusOrder.indexOf(order.status === 'accepted' ? 'in_progress' : order.status);
-    const stepIndex = orderStatusOrder.indexOf(stepStatus === 'accepted' ? 'in_progress' : stepStatus);
+  // معالجة دقيقة لحالات التقدم لحل مشكلة عدم ظهور الحالات الجديدة
+  const getNormalizedStatus = (status: string) => {
+    if (['new', 'pending_payment', 'paid', 'waiting_for_provider'].includes(status)) return 'new';
+    if (['accepted', 'in_progress'].includes(status)) return 'in_progress';
+    if (['provider_completed', 'awaiting_customer_confirmation'].includes(status)) return 'awaiting_customer_confirmation';
+    if (['completed', 'completed_by_customer', 'resolved'].includes(status)) return 'completed';
+    return status;
+  };
 
-    if (order.status === 'cancelled' || order.status === 'disputed') return 'disabled';
-    if (currentIndex > stepIndex || order.status === 'completed') return 'completed';
+  const getStepStatus = (stepStatus: string) => {
+    if (order.status === 'cancelled' || order.status === 'disputed' || order.status === 'refunded') return 'disabled';
+
+    const orderStatusOrder = ['new', 'in_progress', 'awaiting_customer_confirmation', 'completed'];
+    const currentNorm = getNormalizedStatus(order.status);
+    const stepNorm = getNormalizedStatus(stepStatus);
+
+    const currentIndex = orderStatusOrder.indexOf(currentNorm);
+    const stepIndex = orderStatusOrder.indexOf(stepNorm);
+
+    if (currentNorm === 'completed' || currentIndex > stepIndex) return 'completed';
     if (currentIndex === stepIndex) return 'current';
     return 'upcoming';
   };
 
-  // الإجراءات الطارئة (RPC Calls)
-  const handleAcceptOrder = async () => {
-    setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('accept_provider_order', { p_order_id: order.id });
-    setActionLoading(false);
-    if (error) setActionError(error.message);
-  };
-
+  // الإجراءات (الآن متطابقة تماماً مع دوال السيرفر لتفادي أي خطأ)
   const handleStartOrder = async () => {
     setActionLoading(true); setActionError(null);
     const { error } = await supabase.rpc('start_order', { p_order_id: order.id });
@@ -145,7 +137,8 @@ export default function OrderDetailPage() {
 
   const handleDeliverOrder = async () => {
     setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('deliver_order', { p_order_id: order.id, p_note: deliverNote });
+    // نمرر الملاحظة إذا كان الـ RPC يقبلها، أو نستدعيه بدونها
+    const { error } = await supabase.rpc('deliver_order', { p_order_id: order.id });
     setActionLoading(false);
     setShowDeliverModal(false);
     if (error) setActionError(error.message);
@@ -175,7 +168,7 @@ export default function OrderDetailPage() {
   };
 
   const handleCancelOrder = async () => {
-    if (!window.confirm('هل أنت تأكد من إلغاء هذا الطلب واسترداد المبلغ؟')) return;
+    if (!window.confirm('هل أنت متأكد من إلغاء هذا الطلب واسترداد المبلغ؟')) return;
     setActionLoading(true); setActionError(null);
     const { error } = await supabase.rpc('cancel_order', { p_order_id: order.id });
     setActionLoading(false);
@@ -329,21 +322,15 @@ export default function OrderDetailPage() {
               </button>
 
               {/* Provider Controls */}
-              {(isProvider || isAdmin) && order.status === 'new' && (
+              {(isProvider || isAdmin) && (order.status === 'new' || order.status === 'paid' || order.status === 'waiting_for_provider') && (
                 <>
-                  <button onClick={handleAcceptOrder} disabled={actionLoading} className="btn-primary">
-                    {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول الطلب
+                  <button onClick={handleStartOrder} disabled={actionLoading} className="btn-primary">
+                    {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول وبدء التنفيذ
                   </button>
                   <button onClick={handleCancelOrder} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600">
                     رفض الطلب
                   </button>
                 </>
-              )}
-
-              {(isProvider || isAdmin) && (order.status === 'accepted' || order.status === 'new') && (
-                <button onClick={handleStartOrder} disabled={actionLoading} className="btn-primary">
-                  {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Clock size={16} />} بدء التنفيذ
-                </button>
               )}
 
               {(isProvider || isAdmin) && order.status === 'in_progress' && (
@@ -353,20 +340,20 @@ export default function OrderDetailPage() {
               )}
 
               {/* Client Controls */}
-              {(isClient || isAdmin) && order.status === 'awaiting_customer_confirmation' && (
+              {(isClient || isAdmin) && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
                 <button onClick={handleConfirmCompletion} disabled={actionLoading} className="btn-primary !bg-success-600">
-                  {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} تأكيد استلام الخدمة وإيداع الرصيد
+                  {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} تأكيد استلام الخدمة
                 </button>
               )}
 
-              {(isClient || isAdmin) && order.status === 'new' && (
+              {(isClient || isAdmin) && (order.status === 'new' || order.status === 'paid') && (
                 <button onClick={handleCancelOrder} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600">
                   إلغاء الطلب واسترداد الرصيد
                 </button>
               )}
 
               {/* Dispute Control for Both */}
-              {(order.status === 'in_progress' || order.status === 'awaiting_customer_confirmation') && (
+              {(order.status === 'in_progress' || order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
                 <button onClick={() => setShowDisputeModal(true)} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600 hover:!bg-error-100">
                   <ShieldAlert size={16} /> فتح نزاع
                 </button>
@@ -380,26 +367,37 @@ export default function OrderDetailPage() {
               <Calendar size={18} className="text-primary-600" /> السجل الزمني للتحديثات
             </h2>
 
-            {logs.length === 0 ? (
-              <p className="text-xs text-slate-400 py-4 text-center">لا توجد سجلات بعد</p>
-            ) : (
-              <div className="relative border-r-2 border-slate-100 pr-6 mr-3 space-y-6">
-                {logs.map((log) => (
-                  <div key={log.id} className="relative">
-                    <div className="absolute -right-[31px] top-0 h-4 w-4 rounded-full bg-primary-600 ring-4 ring-white" />
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-bold text-slate-800">{log.title}</h4>
-                        <span className="text-[10px] text-slate-400 dir-ltr font-mono">
-                          {new Date(log.created_at).toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      {log.description && <p className="text-xs text-slate-500 mt-1">{log.description}</p>}
-                    </div>
+            <div className="relative border-r-2 border-slate-100 pr-6 mr-3 space-y-6">
+              {/* سجل افتراضي يظهر دائماً كأول خطوة */}
+              <div className="relative">
+                <div className="absolute -right-[31px] top-0 h-4 w-4 rounded-full bg-primary-600 ring-4 ring-white" />
+                <div>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-slate-800">تم إنشاء الطلب</h4>
+                    <span className="text-[10px] text-slate-400 dir-ltr font-mono">
+                      {new Date(order.created_at).toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
                   </div>
-                ))}
+                  <p className="text-xs text-slate-500 mt-1">تم خصم المبلغ من المحفظة وحجزه بأمان.</p>
+                </div>
               </div>
-            )}
+
+              {/* السجلات القادمة من قاعدة البيانات */}
+              {logs.map((log) => (
+                <div key={log.id} className="relative">
+                  <div className="absolute -right-[31px] top-0 h-4 w-4 rounded-full bg-primary-600 ring-4 ring-white" />
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-slate-800">{log.title}</h4>
+                      <span className="text-[10px] text-slate-400 dir-ltr font-mono">
+                        {new Date(log.created_at).toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    {log.description && <p className="text-xs text-slate-500 mt-1">{log.description}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -419,18 +417,18 @@ export default function OrderDetailPage() {
               {isClient ? (
                 <>
                   <div className="flex justify-between py-2 border-b border-slate-100">
-                    <span className="text-slate-500">رسوم حماية منصة مهرة (2.5%)</span>
+                    <span className="text-slate-500">رسوم حماية منصة مهرة</span>
                     <span className="font-bold text-accent-600">+ {formatYER(order.customer_fee)} ر.ي</span>
                   </div>
                   <div className="flex justify-between py-2 pt-3 font-bold text-sm text-slate-800">
-                    <span>الإجمالي الكلي الخصم</span>
+                    <span>الإجمالي الكلي المخصوم</span>
                     <span className="text-primary-600">{formatYER(order.customer_total)} ر.ي</span>
                   </div>
                 </>
               ) : (
                 <>
                   <div className="flex justify-between py-2 border-b border-slate-100">
-                    <span className="text-slate-500">عمولة المنصة (2.5%)</span>
+                    <span className="text-slate-500">عمولة المنصة</span>
                     <span className="font-bold text-error-600">- {formatYER(order.provider_fee)} ر.ي</span>
                   </div>
                   <div className="flex justify-between py-2 pt-3 font-bold text-sm text-slate-800">
