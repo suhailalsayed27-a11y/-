@@ -31,7 +31,7 @@ export default function OrderDetailPage() {
   // Modals state
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [showDeliverModal, setShowDeliverModal] = useState(false);
-  const [showClientConfirmModal, setShowClientConfirmModal] = useState(false); // نافذة تأكيد العميل الجديدة
+  const [showClientConfirmModal, setShowClientConfirmModal] = useState(false); 
   
   const [disputeReason, setDisputeReason] = useState('');
   const [disputeDetails, setDisputeDetails] = useState('');
@@ -99,7 +99,6 @@ export default function OrderDetailPage() {
 
   const isClient = profile.id === order.client_id;
   const isProvider = profile.id === order.provider_id;
-  const isAdmin = profile.is_admin === true || (profile as any)?.role === 'admin';
 
   const getNormalizedStatus = (status: string) => {
     if (['new', 'pending', 'idle', 'pending_payment', 'paid', 'waiting_for_provider'].includes(status)) return 'new';
@@ -292,8 +291,8 @@ export default function OrderDetailPage() {
             </h2>
 
             <div className="flex flex-wrap gap-3">
-              {/* Provider Controls: Accept / Reject / Start / Deliver */}
-              {(isProvider || isAdmin) && (order.status === 'new' || order.status === 'pending_payment' || order.status === 'paid' || order.status === 'waiting_for_provider') && (
+              {/* أزرار مقدم الخدمة فقط */}
+              {isProvider && (order.status === 'new' || order.status === 'pending_payment' || order.status === 'paid' || order.status === 'waiting_for_provider') && (
                 <>
                   <button onClick={handleStartOrder} disabled={actionLoading} className="btn-primary flex-1 sm:flex-none">
                     {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول الطلب وبدء العمل
@@ -304,20 +303,20 @@ export default function OrderDetailPage() {
                 </>
               )}
 
-              {(isProvider || isAdmin) && order.status === 'in_progress' && (
+              {isProvider && order.status === 'in_progress' && (
                 <button onClick={() => setShowDeliverModal(true)} disabled={actionLoading} className="btn-primary !bg-success-600">
                   <CheckCircle2 size={16} /> تم تسليم العمل
                 </button>
               )}
 
-              {/* Client Controls: Confirm Completion */}
-              {(isClient || isAdmin) && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
+              {/* أزرار العميل فقط */}
+              {isClient && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
                 <button onClick={() => setShowClientConfirmModal(true)} disabled={actionLoading} className="btn-primary !bg-success-600 w-full sm:w-auto">
                   <CheckCircle2 size={16} /> تأكيد إنجاز العمل
                 </button>
               )}
 
-              {(isClient || isAdmin) && (order.status === 'new' || order.status === 'pending_payment' || order.status === 'paid') && (
+              {isClient && (order.status === 'new' || order.status === 'pending_payment' || order.status === 'paid') && (
                 <button onClick={handleCancelOrder} disabled={actionLoading} className="btn-ghost !bg-error-50 !text-error-600">
                   إلغاء الطلب 
                 </button>
