@@ -3,8 +3,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Tag, MapPin, Users, ClipboardList, Settings,
   LogOut, Menu, X, CheckCircle, XCircle, Eye, EyeOff, Trash2, Edit3, Plus,
-  TrendingUp, UserCheck, Building, Package, ArrowLeft, Search, Star, Shield,
-  Megaphone, Loader2, Scale, Wallet, CreditCard, ArrowRightLeft,
+  TrendingUp, UserCheck, Package, ArrowLeft, Search, Star, Shield,
+  Megaphone, Loader2, Scale, Wallet, ArrowRightLeft,
   type LucideIcon
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -143,7 +143,7 @@ export default function AdminPage() {
           {section === 'cities' && <CitiesSection />}
           {section === 'users' && <UsersSection />}
           {section === 'providers' && <ProvidersSection />}
-          {section === 'orders' && <DisputesSection />} {/* Fixed typo from earlier context if any */}
+          {section === 'orders' && <DisputesSection />}
           {section === 'orders' && <OrdersSection />}
           {section === 'disputes' && <DisputesSection />}
           {section === 'finance' && <FinanceSection />}
@@ -308,26 +308,103 @@ function DashboardSection() {
 // ============ LISTINGS ============
 function ListingsSection() {
   const { reload } = useStaticData();
-  const [listings, setListings] = useState<Listing[]>([]);
+  const [listings, setListings] = useState<(Listing & { rejection_reason?: string | null })[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [editing, setEditing] = useState<Listing | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+
+  // حالات نافذة رفض الخدمة مع سبب الرفض
+  const [rejectingListing, setRejectingListing] = useState<Listing | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
   const fetchListings = async () => {
     const { data } = await supabase
       .from('listings')
       .select('*, category:categories(*), provider:profiles(*)')
       .order('created_at', { ascending: false });
-    setListings((data as Listing[]) || []);
+    setListings((data as (Listing & { rejection_reason?: string | null })[]) || []);
     setLoading(false);
   };
 
   useEffect(() => { fetchListings(); }, []);
 
   const updateStatus = async (id: string, status: string) => {
-    await supabase.from('listings').update({ status }).eq('id', id);
-    setListings(listings.map((l) => l.id === id ? { ...l, status: status as Listing['status'] } : l));
+    const updates: Record<string, unknown> = { status };
+    if (status === 'published') {
+      updates.rejection_reason = null;
+    }
+
+    const { error } = await supabase.from('listings').update(updates).eq('id', id);
+    if (error) {
+      alert('حدث خطأ: ' + error.message);
+      return;
+    }
+
+    // إشعار صاحب الخدمة عند القبول
+    const targetListing = listings.find((l) => l.id === id);
+    if (status === 'published' && targetListing?.provider_id) {
+      await supabase.from('notifications').insert({
+        user_id: targetListing.provider_id,
+        type: 'system',
+        title: 'تمت الموافقة على خدمتك 🎉',
+        body: `تمت مراجعة والموافقة على خدمتك "${targetListing.service_name}" وهي الآن منشورة للعملاء.`,
+        link: `/listings/${targetListing.id}`,
+      });
+    }
+
+    setListings(listings.map((l) => l.id === id ? {
+      ...l,
+      status: status as Listing['status'],
+      rejection_reason: status === 'published' ? null : l.rejection_reason,
+    } : l));
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectingListing) return;
+    const reasonText = rejectionReason.trim();
+    if (!reasonText) {
+      alert('يرجى كتابة سبب رفض الخدمة');
+      return;
+    }
+
+    setRejectSubmitting(true);
+
+    const { error } = await supabase
+      .from('listings')
+      .update({
+        status: 'rejected',
+        rejection_reason: reasonText,
+      })
+      .eq('id', rejectingListing.id);
+
+    if (error) {
+      setRejectSubmitting(false);
+      alert('حدث خطأ أثناء رفض الخدمة: ' + error.message);
+      return;
+    }
+
+    // إرسال إشعار لصاحب الخدمة يتضمن سبب الرفض
+    if (rejectingListing.provider_id) {
+      await supabase.from('notifications').insert({
+        user_id: rejectingListing.provider_id,
+        type: 'system',
+        title: 'تم رفض طلب نشر خدمتك',
+        body: `تم رفض خدمتك "${rejectingListing.service_name}". السبب: ${reasonText}`,
+        link: '/profile',
+      });
+    }
+
+    setListings(listings.map((l) => l.id === rejectingListing.id ? {
+      ...l,
+      status: 'rejected' as Listing['status'],
+      rejection_reason: reasonText,
+    } : l));
+
+    setRejectSubmitting(false);
+    setRejectingListing(null);
+    setRejectionReason('');
   };
 
   const toggleFeatured = async (l: Listing) => {
@@ -351,8 +428,8 @@ function ListingsSection() {
         <div className="flex gap-2 overflow-x-auto no-scrollbar">
           {[
             { key: 'all', label: 'الكل' },
+            { key: 'pending', label: `بانتظار المراجعة (${listings.filter((l) => l.status === 'pending').length})` },
             { key: 'published', label: 'منشورة' },
-            { key: 'pending', label: 'بانتظار المراجعة' },
             { key: 'hidden', label: 'مخفية' },
             { key: 'rejected', label: 'مرفوضة' },
           ].map((f) => (
@@ -375,7 +452,7 @@ function ListingsSection() {
       <div className="space-y-3">
         {filtered.map((l) => (
           <div key={l.id} className="card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
               {l.provider?.avatar_url ? (
                 <img src={l.provider.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover shrink-0" />
               ) : (
@@ -383,34 +460,62 @@ function ListingsSection() {
                   {l.provider?.full_name?.charAt(0) || '?'}
                 </div>
               )}
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="font-bold text-slate-800 truncate">{l.service_name}</p>
                 <p className="text-sm text-slate-500 truncate">
                   {l.provider?.full_name} • {l.city} • {Number(l.price).toLocaleString('ar-EG')} ر.ي
                 </p>
-                <div className="flex items-center gap-2 mt-1">
+                {l.description && (
+                  <p className="text-xs text-slate-400 mt-1 line-clamp-2">{l.description}</p>
+                )}
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   <span className={`badge ${
                     l.status === 'published' ? 'bg-success-100 text-success-700' :
                     l.status === 'pending' ? 'bg-accent-100 text-accent-700' :
                     l.status === 'hidden' ? 'bg-slate-200 text-slate-600' :
                     'bg-error-100 text-error-700'
                   }`}>
-                    {l.status === 'published' ? 'منشورة' : l.status === 'pending' ? 'بانتظار' : l.status === 'hidden' ? 'مخفية' : 'مرفوضة'}
+                    {l.status === 'published' ? 'منشورة' : l.status === 'pending' ? 'بانتظار المراجعة' : l.status === 'hidden' ? 'مخفية' : 'مرفوضة'}
                   </span>
                   {l.featured && <span className="badge bg-accent-100 text-accent-700">مميزة</span>}
                 </div>
+                {l.status === 'rejected' && l.rejection_reason && (
+                  <p className="mt-2 rounded-lg bg-error-50 px-3 py-1.5 text-xs text-error-700">
+                    <span className="font-bold">سبب الرفض:</span> {l.rejection_reason}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-1.5 shrink-0">
               {l.status === 'pending' && (
                 <>
-                  <button onClick={() => updateStatus(l.id, 'published')} className="btn-ghost !bg-success-50 !text-success-600 !px-2.5 !py-1.5" title="موافقة">
-                    <CheckCircle size={16} />
+                  <button
+                    onClick={() => updateStatus(l.id, 'published')}
+                    className="btn-ghost !bg-success-50 !text-success-600 hover:!bg-success-100 !px-3 !py-1.5 !text-xs font-bold flex items-center gap-1"
+                    title="موافقة ونشر"
+                  >
+                    <CheckCircle size={16} /> موافقة
                   </button>
-                  <button onClick={() => updateStatus(l.id, 'rejected')} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5" title="رفض">
-                    <XCircle size={16} />
+                  <button
+                    onClick={() => {
+                      setRejectingListing(l);
+                      setRejectionReason('');
+                    }}
+                    className="btn-ghost !bg-error-50 !text-error-600 hover:!bg-error-100 !px-3 !py-1.5 !text-xs font-bold flex items-center gap-1"
+                    title="رفض مع سبب"
+                  >
+                    <XCircle size={16} /> رفض
                   </button>
                 </>
+              )}
+              {l.status === 'rejected' && (
+                <button
+                  onClick={() => updateStatus(l.id, 'published')}
+                  className="btn-ghost !bg-success-50 !text-success-600 !px-2.5 !py-1.5 !text-xs font-bold"
+                  title="موافقة ونشر"
+                >
+                  <CheckCircle size={16} />
+                </button>
               )}
               {l.status === 'published' && (
                 <button onClick={() => updateStatus(l.id, 'hidden')} className="btn-ghost !bg-slate-100 !px-2.5 !py-1.5" title="إخفاء">
@@ -439,6 +544,62 @@ function ListingsSection() {
         ))}
         {filtered.length === 0 && <EmptyState text="لا توجد خدمات" />}
       </div>
+
+      {/* نافذة كتابة سبب رفض الخدمة */}
+      {rejectingListing && (
+        <Modal
+          title="رفض الخدمة وإرسال السبب"
+          onClose={() => !rejectSubmitting && setRejectingListing(null)}
+        >
+          <div className="space-y-4">
+            <div className="rounded-xl bg-slate-50 p-3 text-sm">
+              <p className="font-bold text-slate-800">{rejectingListing.service_name}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                مقدم الخدمة: {rejectingListing.provider?.full_name}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                سبب رفض الخدمة (سيصل كرسالة إشعار لصاحب الخدمة) *
+              </label>
+              <textarea
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="اكتب سبب الرفض بوضوح (مثال: يرجى إضافة وصف أوضح للخدمة وتحديد السعر بدقة)..."
+                rows={4}
+                className="input-field resize-none"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setRejectingListing(null)}
+                disabled={rejectSubmitting}
+                className="btn-ghost flex-1 !bg-slate-100"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReject}
+                disabled={rejectSubmitting || !rejectionReason.trim()}
+                className="btn-primary flex-1 !bg-error-600 disabled:opacity-50"
+              >
+                {rejectSubmitting ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 size={16} className="animate-spin" /> جاري الرفض...
+                  </span>
+                ) : (
+                  'تأكيد الرفض وإرسال الرسالة'
+                )}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {(editing || showAdd) && (
         <ListingEditModal
@@ -1250,7 +1411,7 @@ function DisputesSection() {
   );
 }
 
-// ============ FINANCE & WALLETS (NEW) ============
+// ============ FINANCE & WALLETS ============
 function FinanceSection() {
   const [tab, setTab] = useState<'overview' | 'wallets' | 'transactions'>('overview');
   
@@ -1275,7 +1436,6 @@ function FinanceSection() {
 
   useEffect(() => {
     (async () => {
-      // 1. Fetch Orders and Settings
       const { data: orders } = await supabase.from('orders').select('service_price, customer_fee, provider_fee, mahra_revenue, status');
       const all = orders || [];
       const completed = all.filter((o: { status: string }) => o.status === 'completed');
@@ -1289,7 +1449,6 @@ function FinanceSection() {
       const { data: cs } = await supabase.from('commission_settings').select('*').eq('id', 1).maybeSingle();
       if (cs) setSettings(cs as typeof settings);
 
-      // 2. Fetch Wallets, Transactions, and Profiles for mapping
       const [{ data: wData }, { data: tData }, { data: pData }] = await Promise.all([
         supabase.from('wallets').select('*'),
         supabase.from('wallet_transactions').select('*').order('created_at', { ascending: false }),
@@ -1644,7 +1803,6 @@ function NotificationsSection() {
     }
     setSending(true);
 
-    // استخدام الدالة الآمنة (الـ VIP) في قاعدة البيانات لتخطي RLS
     const { data, error: rpcError } = await supabase.rpc('send_notification_to_all', {
       p_title: title.trim(),
       p_body: body.trim() || null,

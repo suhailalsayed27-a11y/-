@@ -1,20 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight, CheckCircle, X, Loader2, Wallet as WalletIcon, AlertCircle } from 'lucide-react';
+import { MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight, CheckCircle, X, Loader2, Wallet as WalletIcon, AlertCircle, Clock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { getCategoryColor } from '@/types';
-import { calculateFees, formatYER } from '@/lib/commission';
+import { calculateFees, formatYER, CommissionSettings } from '@/lib/commission';
 import type { Listing, Review, ListingImage } from '@/types';
 import StarRating from '@/components/StarRating';
+
+type DetailedListing = Listing & { rejection_reason?: string | null };
 
 export default function ListingDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { profile, session } = useAuth();
-  const [listing, setListing] = useState<Listing | null>(null);
+  const [listing, setListing] = useState<DetailedListing | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [images, setImages] = useState<ListingImage[]>([]);
+  const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(null);
   const [loading, setLoading] = useState(true);
   
   // Order & Wallet States
@@ -27,7 +30,7 @@ export default function ListingDetailPage() {
   useEffect(() => {
     (async () => {
       if (!id) return;
-      const [listRes, revRes, imgRes] = await Promise.all([
+      const [listRes, revRes, imgRes, settingsRes] = await Promise.all([
         supabase
           .from('listings')
           .select('*, category:categories(*), provider:profiles(*)')
@@ -35,10 +38,18 @@ export default function ListingDetailPage() {
           .maybeSingle(),
         supabase.from('reviews').select('*').eq('listing_id', id).order('created_at', { ascending: false }),
         supabase.from('listing_images').select('*').eq('listing_id', id).order('sort_order'),
+        supabase
+          .from('commission_settings')
+          .select('customer_fee_percentage, provider_fee_percentage, minimum_customer_fee, minimum_provider_fee')
+          .eq('id', 1)
+          .maybeSingle(),
       ]);
-      setListing(listRes.data as Listing | null);
+      setListing(listRes.data as DetailedListing | null);
       setReviews((revRes.data as Review[]) || []);
       setImages((imgRes.data as ListingImage[]) || []);
+      if (settingsRes.data) {
+        setCommissionSettings(settingsRes.data as CommissionSettings);
+      }
       setLoading(false);
     })();
   }, [id]);
@@ -46,9 +57,13 @@ export default function ListingDetailPage() {
   // جلب رصيد المحفظة عند فتح نافذة الطلب
   useEffect(() => {
     if (showOrderModal && profile) {
-      supabase.from('wallets').select('balance').eq('user_id', profile.id).maybeSingle()
+      supabase
+        .from('wallets')
+        .select('balance')
+        .eq('user_id', profile.id)
+        .maybeSingle()
         .then(({ data }) => {
-           setWalletBalance(data ? Number(data.balance) : 0);
+          setWalletBalance(data ? Number(data.balance) : 0);
         });
     }
   }, [showOrderModal, profile]);
@@ -58,15 +73,14 @@ export default function ListingDetailPage() {
       navigate('/auth/signin');
       return;
     }
-    if (!listing) return;
+    if (!listing || profile.id === listing.provider_id) return;
 
-    // Check if conversation already exists
+    // التحقق من وجود محادثة سابقة بين الطرفين في كلا الاتجاهين
     const { data: existing } = await supabase
       .from('conversations')
       .select('id')
       .eq('listing_id', listing.id)
-      .eq('user1_id', profile.id)
-      .eq('user2_id', listing.provider_id)
+      .or(`and(user1_id.eq.${profile.id},user2_id.eq.${listing.provider_id}),and(user1_id.eq.${listing.provider_id},user2_id.eq.${profile.id})`)
       .maybeSingle();
 
     if (existing) {
@@ -74,7 +88,7 @@ export default function ListingDetailPage() {
       return;
     }
 
-    // Create new conversation
+    // إنشاء محادثة جديدة
     const { data: newConv } = await supabase
       .from('conversations')
       .insert({
@@ -95,9 +109,9 @@ export default function ListingDetailPage() {
       navigate('/auth/signin');
       return;
     }
-    if (!listing) return;
+    if (!listing || profile.id === listing.provider_id) return;
 
-    const fees = calculateFees(Number(listing.price));
+    const fees = calculateFees(Number(listing.price), commissionSettings);
     if (walletBalance === null || walletBalance < fees.customer_total) {
       setOrderStatus({ type: 'error', msg: 'رصيد المحفظة غير كافٍ لإتمام الطلب' });
       return;
@@ -113,20 +127,19 @@ export default function ListingDetailPage() {
       setOrderStatus({ type: 'error', msg: error.message });
     } else {
       setOrderStatus({ type: 'success' });
-      setWalletBalance(prev => prev !== null ? prev - fees.customer_total : 0);
+      setWalletBalance(prev => (prev !== null ? prev - fees.customer_total : 0));
       
       setTimeout(() => {
         setShowOrderModal(false);
         setOrderStatus({ type: 'idle' });
         setOrderNotes('');
         
-        // التوجيه الذكي إلى صفحة الطلب المستقلة الجديدة
         if (data) {
           navigate(`/orders/${data}`);
         } else {
-          navigate('/orders'); // بديل احتياطي إذا لم يُرجع السيرفر المعرف
+          navigate('/orders');
         }
-      }, 1500); // قللت الوقت قليلاً لتسريع الانتقال بعد الدفع
+      }, 1500);
     }
   };
 
@@ -142,10 +155,16 @@ export default function ListingDetailPage() {
     );
   }
 
-  if (!listing) {
+  const isOwner = profile?.id === listing?.provider_id;
+  const isAdmin = Boolean(profile?.is_admin);
+  const isPubliclyVisible = listing?.status === 'published';
+
+  // إخفاء الخدمة عن الزوار والعملاء إذا لم تكن منشورة بعد
+  if (!listing || (!isPubliclyVisible && !isOwner && !isAdmin)) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <h2 className="text-xl font-bold text-slate-700">الخدمة غير موجودة</h2>
+      <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+        <h2 className="text-xl font-bold text-slate-700">الخدمة غير متاحة حالياً</h2>
+        <p className="text-sm text-slate-400 mt-1">قد تكون هذه الخدمة قيد المراجعة أو غير منشورة</p>
         <Link to="/services" className="btn-primary mt-4">العودة للخدمات</Link>
       </div>
     );
@@ -164,6 +183,39 @@ export default function ListingDetailPage() {
           <ArrowRight size={16} />
           العودة للخدمات
         </Link>
+
+        {/* تنبيه حالة الخدمة لصاحبها أو للأدمن إذا لم تكن منشورة */}
+        {!isPubliclyVisible && (
+          <div className={`mb-4 rounded-2xl border p-4 text-sm ${
+            listing.status === 'rejected'
+              ? 'border-error-200 bg-error-50 text-error-800'
+              : 'border-accent-200 bg-accent-50 text-accent-800'
+          }`}>
+            <div className="flex items-center gap-2 font-bold">
+              {listing.status === 'rejected' ? (
+                <>
+                  <AlertCircle size={18} className="text-error-600 shrink-0" />
+                  <span>هذه الخدمة مرفوضة ولا تظهر للعملاء</span>
+                </>
+              ) : listing.status === 'pending' ? (
+                <>
+                  <Clock size={18} className="text-accent-600 shrink-0" />
+                  <span>هذه الخدمة بانتظار موافقة الإدارة ولا تظهر للعملاء بعد</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={18} className="text-slate-600 shrink-0" />
+                  <span>هذه الخدمة مخفية حالياً</span>
+                </>
+              )}
+            </div>
+            {listing.status === 'rejected' && listing.rejection_reason && (
+              <p className="mt-1.5 text-xs leading-relaxed">
+                <span className="font-bold">سبب الرفض:</span> {listing.rejection_reason}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Hero card */}
         <div className="card overflow-hidden mb-6">
@@ -197,7 +249,10 @@ export default function ListingDetailPage() {
                     src={providerAvatar}
                     alt={providerName}
                     className="h-20 w-20 rounded-2xl border-4 border-white bg-white object-cover shadow-lg"
-                    onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }}
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                    }}
                   />
                 ) : null}
                 <div className={`flex h-20 w-20 items-center justify-center rounded-2xl border-4 border-white bg-primary-100 text-2xl font-black text-primary-700 shadow-lg ${providerAvatar ? 'hidden' : ''}`}>
@@ -233,16 +288,22 @@ export default function ListingDetailPage() {
             </div>
 
             {/* Action buttons */}
-            <div className="mt-4 flex gap-3">
-              <button onClick={handleContact} className="btn-secondary flex-1">
-                <MessageCircle size={20} />
-                تواصل مع مقدم الخدمة
-              </button>
-              <button onClick={() => setShowOrderModal(true)} className="btn-primary flex-1">
-                <ShoppingCart size={20} />
-                طلب الخدمة
-              </button>
-            </div>
+            {isOwner ? (
+              <div className="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-3 text-center text-sm font-bold text-slate-600">
+                هذه خدمتك الخاصة — يمكنك تعديلها أو إدارتها من <Link to="/profile" className="text-primary-600 underline">ملفك الشخصي</Link>
+              </div>
+            ) : isPubliclyVisible ? (
+              <div className="mt-4 flex gap-3">
+                <button onClick={handleContact} className="btn-secondary flex-1">
+                  <MessageCircle size={20} />
+                  تواصل مع مقدم الخدمة
+                </button>
+                <button onClick={() => setShowOrderModal(true)} className="btn-primary flex-1">
+                  <ShoppingCart size={20} />
+                  طلب الخدمة
+                </button>
+              </div>
+            ) : null}
             
             <div className="mt-6 mb-4 p-4 bg-yellow-50 border-r-4 border-yellow-500 rounded-lg shadow-sm">
               <p className="text-sm text-yellow-800 text-right font-cairo leading-relaxed">
@@ -315,8 +376,8 @@ export default function ListingDetailPage() {
       )}
 
       {/* Order modal */}
-      {showOrderModal && listing && (() => {
-        const fees = calculateFees(Number(listing.price));
+      {showOrderModal && listing && !isOwner && isPubliclyVisible && (() => {
+        const fees = calculateFees(Number(listing.price), commissionSettings);
         const isBalanceSufficient = walletBalance !== null && walletBalance >= fees.customer_total;
 
         return (
@@ -333,7 +394,7 @@ export default function ListingDetailPage() {
               ) : (
                 <>
                   <h3 className="text-lg font-black text-slate-800 mb-1">ملخص الدفع والطلب</h3>
-                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} - {providerName}</p>
+                  <p className="text-sm text-slate-500 mb-4">{listing.service_name} — {providerName}</p>
                   
                   <div className="space-y-4">
                     <div>

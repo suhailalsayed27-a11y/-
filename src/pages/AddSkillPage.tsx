@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, X, CheckCircle, Loader2 } from 'lucide-react';
+import { Camera, X, CheckCircle, Loader2, Clock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStaticData } from '@/hooks/useStaticData';
@@ -25,6 +25,7 @@ export default function AddSkillPage() {
   const [workImages, setWorkImages] = useState<WorkImage[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [isPublishedNow, setIsPublishedNow] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,10 +63,10 @@ export default function AddSkillPage() {
 
     setSubmitting(true);
 
-    // التحقق من نوع الحساب قبل السماح بالنشر
+    // التحقق من نوع الحساب وصلاحية الإدارة
     const { data: userProfile, error: profileError } = await supabase
       .from('profiles')
-      .select('account_type')
+      .select('account_type, is_admin')
       .eq('id', profile.id)
       .single();
 
@@ -75,12 +76,17 @@ export default function AddSkillPage() {
       return;
     }
 
-    // منع الحساب من نوع "عميل" من النشر وإظهار الرسالة المطلوبة
-    if (userProfile?.account_type === 'client') {
+    const isAdmin = userProfile?.is_admin === true;
+
+    // منع الحساب من نوع "عميل" (غير الأدمن) من النشر
+    if (!isAdmin && userProfile?.account_type === 'client') {
       setError('لا يمكنك نشر خدمه بحساب عميل');
       setSubmitting(false);
       return;
     }
+
+    // الأدمن تُنشر خدمته فوراً، والمستخدم العادي تدخل للمراجعة (pending)
+    const targetStatus = isAdmin ? 'published' : 'pending';
 
     const { data, error: insertError } = await supabase
       .from('listings')
@@ -92,7 +98,7 @@ export default function AddSkillPage() {
         price: Number(price),
         experience,
         city,
-        status: 'published', // تم التعديل لتنشر الخدمة فوراً دون مراجعة
+        status: targetStatus,
       })
       .select()
       .single();
@@ -103,7 +109,7 @@ export default function AddSkillPage() {
       return;
     }
 
-    // Save images 
+    // Save images
     if (data && workImages.length > 0) {
       const validUrls = workImages.filter((img) => !img.url.startsWith('data:'));
       if (validUrls.length > 0) {
@@ -117,11 +123,12 @@ export default function AddSkillPage() {
       }
     }
 
+    setIsPublishedNow(isAdmin);
     setSuccess(true);
     setSubmitting(false);
     setTimeout(() => {
-      navigate('/profile'); 
-    }, 2000);
+      navigate('/profile');
+    }, 2500);
   };
 
   if (!session) return null;
@@ -130,11 +137,23 @@ export default function AddSkillPage() {
     return (
       <div className="min-h-[60vh] flex items-center justify-center px-4">
         <div className="card p-8 text-center max-w-md w-full">
-          <div className="flex h-20 w-20 mx-auto items-center justify-center rounded-full bg-success-100 mb-4">
-            <CheckCircle size={44} className="text-success-600" />
-          </div>
-          <h2 className="text-xl font-black text-slate-800 mb-2">تم نشر خدمتك بنجاح!</h2>
-          <p className="text-slate-500">خدمتك الآن متاحة للعملاء في المنصة وتقبل الطلبات.</p>
+          {isPublishedNow ? (
+            <>
+              <div className="flex h-20 w-20 mx-auto items-center justify-center rounded-full bg-success-100 mb-4">
+                <CheckCircle size={44} className="text-success-600" />
+              </div>
+              <h2 className="text-xl font-black text-slate-800 mb-2">تم نشر خدمتك بنجاح!</h2>
+              <p className="text-slate-500">خدمتك الآن متاحة للعملاء في المنصة وتقبل الطلبات.</p>
+            </>
+          ) : (
+            <>
+              <div className="flex h-20 w-20 mx-auto items-center justify-center rounded-full bg-orange-100 mb-4">
+                <Clock size={44} className="text-orange-600" />
+              </div>
+              <h2 className="text-xl font-black text-slate-800 mb-2">تم إرسال خدمتك للمراجعة!</h2>
+              <p className="text-slate-500">سيتم مراجعة خدمتك من قِبل الإدارة والموافقة عليها قبل نشرها للعملاء.</p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -295,7 +314,7 @@ export default function AddSkillPage() {
                 جاري الإرسال...
               </span>
             ) : (
-              'نشر الخدمة'
+              'إرسال الخدمة'
             )}
           </button>
         </form>

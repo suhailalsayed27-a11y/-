@@ -29,6 +29,14 @@ const STATUS_CONFIG: Record<OrderStatus, { label: string; color: string; bg: str
   confirmation_expired: { label: 'انتهت مهلة التأكيد', color: 'text-slate-700', bg: 'bg-slate-200', icon: Clock },
 };
 
+const DISPUTE_REASONS = [
+  'عدم التزام الطرف الآخر بالاتفاق',
+  'تأخر كبير في تسليم الخدمة',
+  'جودة العمل لا تطابق الوصف المطلوب',
+  'عدم استجابة الطرف الآخر للرسائل',
+  'سبب آخر',
+];
+
 export default function OrdersPage() {
   const { profile, session, loading } = useAuth();
   const navigate = useNavigate();
@@ -86,24 +94,19 @@ export default function OrdersPage() {
   // تحديث فلاتر الحالات لدمج الحالات المترادفة
   const filtered = orders.filter((o) => {
     if (filter === 'all') return true;
-    
-    // دمج حالات الطلب الجديد للظهور تحت تصنيف "جديدة"
     if (filter === 'new') {
       return ['new', 'pending_payment', 'paid', 'waiting_for_provider'].includes(o.status);
     }
-    // دمج حالات التنفيذ للظهور تحت "قيد التنفيذ"
     if (filter === 'in_progress') {
       return ['accepted', 'in_progress'].includes(o.status);
     }
-    // دمج حالات الانتهاء للظهور تحت "مكتملة"
     if (filter === 'completed') {
       return ['completed', 'completed_by_customer', 'resolved'].includes(o.status);
     }
-    
     return o.status === filter;
   });
 
-  // دوال التحكم الجديدة المربوطة بـ RPC
+  // دوال التحكم المربوطة بـ RPC
   const handleStart = async (orderId: string) => {
     setActionLoading(true); setActionError(null);
     const { error } = await supabase.rpc('start_order', { p_order_id: orderId });
@@ -115,7 +118,10 @@ export default function OrdersPage() {
   const handleDeliver = async () => {
     if (!showCompleteModal) return;
     setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('deliver_order', { p_order_id: showCompleteModal });
+    const { error } = await supabase.rpc('deliver_order', {
+      p_order_id: showCompleteModal,
+      p_note: completeNote.trim() || null,
+    });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     setShowCompleteModal(null);
@@ -133,8 +139,17 @@ export default function OrdersPage() {
 
   const handleDispute = async () => {
     if (!showDisputeModal) return;
+    if (!disputeReason.trim() || !disputeDetails.trim()) {
+      setActionError('يرجى اختيار سبب النزاع وكتابة تفاصيل المشكلة بوضوح');
+      return;
+    }
+
     setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('dispute_order', { p_order_id: showDisputeModal });
+    const { error } = await supabase.rpc('dispute_order', {
+      p_order_id: showDisputeModal,
+      p_reason: disputeReason.trim(),
+      p_details: disputeDetails.trim(),
+    });
     setActionLoading(false);
     if (error) { setActionError(error.message); return; }
     setShowDisputeModal(null);
@@ -186,7 +201,7 @@ export default function OrdersPage() {
         <h1 className="text-2xl font-black text-slate-800 mb-1">الطلبات</h1>
         <p className="text-slate-500 mb-6">إدارة طلبات الخدمات الخاصة بك كمقدم خدمة أو عميل</p>
 
-        {actionError && (
+        {actionError && !showDisputeModal && !showCompleteModal && (
           <div className="mb-4 rounded-xl bg-error-50 px-4 py-3 text-sm text-error-700 flex items-center justify-between">
             <span>{actionError}</span>
             <button onClick={() => setActionError(null)}><X size={16} /></button>
@@ -195,7 +210,6 @@ export default function OrdersPage() {
 
         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-1">
           {filterTabs.map((tab) => {
-            // Count logic based on merged statuses
             let count = 0;
             if (tab.key === 'all') count = orders.length;
             else if (tab.key === 'new') count = orders.filter(o => ['new', 'pending_payment', 'paid', 'waiting_for_provider'].includes(o.status)).length;
@@ -249,6 +263,7 @@ export default function OrdersPage() {
               const isClient = profile?.id === order.client_id;
               const isAdmin = (profile as any)?.is_admin === true || (profile as any)?.role === 'admin';
               const otherParty = isProvider ? order.client : order.provider;
+              const canDispute = ['in_progress', 'accepted', 'provider_completed', 'awaiting_customer_confirmation'].includes(order.status);
 
               return (
                 <div key={order.id} className="card p-5 cursor-pointer hover:border-primary-200 transition-colors" onClick={() => navigate(`/orders/${order.id}`)}>
@@ -259,7 +274,10 @@ export default function OrdersPage() {
                           src={otherParty.avatar_url}
                           alt={otherParty.full_name}
                           className="h-12 w-12 rounded-xl object-cover shrink-0 border border-slate-100"
-                          onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }}
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                          }}
                         />
                       ) : null}
                       <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-primary-100 text-lg font-bold text-primary-700 shrink-0 border border-primary-50 ${otherParty?.avatar_url ? 'hidden' : ''}`}>
@@ -301,7 +319,7 @@ export default function OrdersPage() {
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-400">رسوم مَهَرَة</p>
-                        <p className="text-sm font-bold text-error-600">- {formatYER(order.provider_fee)}</p>
+                        <p className="text-sm font-bold text-error-600">{formatYER(order.provider_fee)}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-400">المستحق لك</p>
@@ -352,7 +370,16 @@ export default function OrdersPage() {
                       )}
 
                       {(isProvider || isAdmin) && order.status === 'in_progress' && (
-                        <button onClick={(e) => { e.stopPropagation(); setShowCompleteModal(order.id); }} disabled={actionLoading} className="btn-primary !bg-success-600 !px-4 !py-1.5 !text-xs shadow-sm">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionError(null);
+                            setCompleteNote('');
+                            setShowCompleteModal(order.id);
+                          }}
+                          disabled={actionLoading}
+                          className="btn-primary !bg-success-600 !px-4 !py-1.5 !text-xs shadow-sm"
+                        >
                           <CheckCircle size={14} /> تسليم العمل
                         </button>
                       )}
@@ -360,6 +387,22 @@ export default function OrdersPage() {
                       {(isClient || isAdmin) && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
                         <button onClick={(e) => { e.stopPropagation(); handleAccept(order.id); }} disabled={actionLoading} className="btn-primary !bg-success-600 !px-4 !py-1.5 !text-xs shadow-sm">
                           <CheckCircle size={14} /> تأكيد الاستلام
+                        </button>
+                      )}
+
+                      {(isClient || isProvider) && canDispute && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionError(null);
+                            setDisputeReason('');
+                            setDisputeDetails('');
+                            setShowDisputeModal(order.id);
+                          }}
+                          disabled={actionLoading}
+                          className="btn-ghost !bg-error-50 !text-error-600 hover:!bg-error-100 !px-3 !py-1.5 !text-xs font-bold flex items-center gap-1"
+                        >
+                          <ShieldAlert size={14} /> رفع نزاع
                         </button>
                       )}
                     </div>
@@ -373,7 +416,6 @@ export default function OrdersPage() {
 
       {/* Floating Action Buttons (Bottom Left) */}
       <div className="fixed bottom-20 md:bottom-8 left-4 flex flex-col gap-3 z-40">
-        {/* زر التتبع */}
         <button 
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           className="group flex items-center gap-2 bg-white text-slate-700 border border-slate-200 shadow-lg px-4 py-3 rounded-full hover:bg-slate-50 transition-all active:scale-95"
@@ -382,7 +424,6 @@ export default function OrdersPage() {
           <LayoutList size={20} className="text-primary-600" />
         </button>
 
-        {/* زر النزاعات */}
         <button 
           onClick={() => setFilter('disputed')}
           className="group flex items-center gap-2 bg-error-50 text-error-700 border border-error-100 shadow-lg px-4 py-3 rounded-full hover:bg-error-100 transition-all active:scale-95"
@@ -392,19 +433,61 @@ export default function OrdersPage() {
         </button>
       </div>
 
-      {/* نوافذ الشكاوى والتسليم (Modals) */}
+      {/* نافذة فتح النزاع (Dispute Modal) */}
       {showDisputeModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setShowDisputeModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100"><AlertTriangle size={20} className="text-error-600" /></div>
-              <div><h3 className="text-lg font-black text-slate-800">فتح نزاع</h3><p className="text-xs text-slate-500">سيتم مراجعة النزاع وإيقاف تحويل الرصيد</p></div>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100">
+                <AlertTriangle size={20} className="text-error-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-slate-800">فتح نزاع ورفع شكوى</h3>
+                <p className="text-xs text-slate-500">سيتم مراجعة النزاع من الإدارة وإيقاف تحويل الرصيد</p>
+              </div>
             </div>
+
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">سبب النزاع *</label>
+                <select
+                  value={disputeReason}
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  className="input-field"
+                >
+                  <option value="">اختر سبب النزاع...</option>
+                  {DISPUTE_REASONS.map((reason) => (
+                    <option key={reason} value={reason}>{reason}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">تفاصيل المشكلة *</label>
+                <textarea
+                  value={disputeDetails}
+                  onChange={(e) => setDisputeDetails(e.target.value)}
+                  placeholder="اشرح تفاصيل المشكلة بوضوح لمساعدة الإدارة في اتخاذ القرار العادل..."
+                  rows={3}
+                  className="input-field resize-none"
+                />
+              </div>
+
               {actionError && <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>}
+
               <div className="flex gap-2">
-                <button onClick={() => setShowDisputeModal(null)} disabled={actionLoading} className="btn-ghost flex-1 !bg-slate-100">إلغاء</button>
-                <button onClick={handleDispute} disabled={actionLoading} className="btn-primary flex-1 !bg-error-600">
+                <button
+                  onClick={() => setShowDisputeModal(null)}
+                  disabled={actionLoading}
+                  className="btn-ghost flex-1 !bg-slate-100"
+                >
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleDispute}
+                  disabled={actionLoading || !disputeReason.trim() || !disputeDetails.trim()}
+                  className="btn-primary flex-1 !bg-error-600 disabled:opacity-50"
+                >
                   {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />} تأكيد الشكوى
                 </button>
               </div>
@@ -413,19 +496,51 @@ export default function OrdersPage() {
         </div>
       )}
 
+      {/* نافذة تسليم العمل (Complete Modal) */}
       {showCompleteModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setShowCompleteModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100"><CheckCircle size={20} className="text-success-600" /></div>
-              <div><h3 className="text-lg font-black text-slate-800">تسليم العمل</h3><p className="text-xs text-slate-500">سيبدأ عداد 24 ساعة لتأكيد العميل</p></div>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100">
+                <CheckCircle size={20} className="text-success-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-slate-800">تسليم العمل</h3>
+                <p className="text-xs text-slate-500">سيبدأ عداد 24 ساعة لتأكيد العميل</p>
+              </div>
             </div>
+
             <div className="space-y-4">
-              <div className="rounded-xl bg-orange-50 p-3 text-xs text-orange-700">إذا لم يؤكد العميل خلال 24 ساعة، سيتم تحرير الرصيد لمحفظتك تلقائياً.</div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">ملاحظات التسليم (اختياري)</label>
+                <textarea
+                  value={completeNote}
+                  onChange={(e) => setCompleteNote(e.target.value)}
+                  placeholder="أضف تفاصيل أو رابط التسليم للعميل..."
+                  rows={3}
+                  className="input-field resize-none"
+                />
+              </div>
+
+              <div className="rounded-xl bg-orange-50 p-3 text-xs text-orange-700">
+                إذا لم يؤكد العميل خلال 24 ساعة، سيتم تحرير الرصيد لمحفظتك تلقائياً.
+              </div>
+
               {actionError && <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>}
+
               <div className="flex gap-2">
-                <button onClick={() => setShowCompleteModal(null)} disabled={actionLoading} className="btn-ghost flex-1 !bg-slate-100">إلغاء</button>
-                <button onClick={handleDeliver} disabled={actionLoading} className="btn-primary flex-1 !bg-success-600">
+                <button
+                  onClick={() => setShowCompleteModal(null)}
+                  disabled={actionLoading}
+                  className="btn-ghost flex-1 !bg-slate-100"
+                >
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleDeliver}
+                  disabled={actionLoading}
+                  className="btn-primary flex-1 !bg-success-600"
+                >
                   {actionLoading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />} تأكيد التسليم
                 </button>
               </div>

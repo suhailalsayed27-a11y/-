@@ -20,6 +20,16 @@ export default function ServicesPage() {
   const [maxPrice, setMaxPrice] = useState(searchParams.get('maxPrice') || '');
   const [minRating, setMinRating] = useState(searchParams.get('minRating') || '');
 
+  // مزامنة الحالات إذا تغير الرابط من الخارج (مثل الروابط القادمة من الصفحة الرئيسية)
+  useEffect(() => {
+    setSearch(searchParams.get('q') || '');
+    setCategory(searchParams.get('category') || '');
+    setCity(searchParams.get('city') || '');
+    setMinPrice(searchParams.get('minPrice') || '');
+    setMaxPrice(searchParams.get('maxPrice') || '');
+    setMinRating(searchParams.get('minRating') || '');
+  }, [searchParams]);
+
   const fetchListings = useCallback(async () => {
     setLoadingListings(true);
     let query = supabase
@@ -29,7 +39,7 @@ export default function ServicesPage() {
       .order('featured', { ascending: false })
       .order('rating', { ascending: false });
 
-    if (search) query = query.ilike('service_name', `%${search}%`);
+    if (search.trim()) query = query.ilike('service_name', `%${search.trim()}%`);
     if (category) {
       const cat = categories.find((c) => c.name === category);
       if (cat) query = query.eq('category_id', cat.id);
@@ -48,17 +58,41 @@ export default function ServicesPage() {
     if (!loading) fetchListings();
   }, [fetchListings, loading]);
 
-  const applyFilters = () => {
+  const syncUrlParams = (overrides?: {
+    q?: string;
+    category?: string;
+    city?: string;
+    minPrice?: string;
+    maxPrice?: string;
+    minRating?: string;
+  }) => {
+    const next = {
+      q: overrides?.q !== undefined ? overrides.q : search,
+      category: overrides?.category !== undefined ? overrides.category : category,
+      city: overrides?.city !== undefined ? overrides.city : city,
+      minPrice: overrides?.minPrice !== undefined ? overrides.minPrice : minPrice,
+      maxPrice: overrides?.maxPrice !== undefined ? overrides.maxPrice : maxPrice,
+      minRating: overrides?.minRating !== undefined ? overrides.minRating : minRating,
+    };
+
     const params = new URLSearchParams();
-    if (search) params.set('q', search);
-    if (category) params.set('category', category);
-    if (city) params.set('city', city);
-    if (minPrice) params.set('minPrice', minPrice);
-    if (maxPrice) params.set('maxPrice', maxPrice);
-    if (minRating) params.set('minRating', minRating);
+    if (next.q.trim()) params.set('q', next.q.trim());
+    if (next.category) params.set('category', next.category);
+    if (next.city) params.set('city', next.city);
+    if (next.minPrice) params.set('minPrice', next.minPrice);
+    if (next.maxPrice) params.set('maxPrice', next.maxPrice);
+    if (next.minRating) params.set('minRating', next.minRating);
     setSearchParams(params);
+  };
+
+  const handleSelectCategory = (selectedCat: string) => {
+    setCategory(selectedCat);
+    syncUrlParams({ category: selectedCat });
+  };
+
+  const applyFilters = () => {
+    syncUrlParams();
     setShowFilters(false);
-    fetchListings();
   };
 
   const clearFilters = () => {
@@ -69,7 +103,7 @@ export default function ServicesPage() {
     setMaxPrice('');
     setMinRating('');
     setSearchParams({});
-    fetchListings();
+    setShowFilters(false);
   };
 
   const activeFilters = [category, city, minPrice, maxPrice, minRating].filter(Boolean).length;
@@ -88,7 +122,7 @@ export default function ServicesPage() {
               <input
                 type="text"
                 value={search}
-                onChange={(e) => { setSearch(e.target.value); }}
+                onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
                 placeholder="ابحث عن خدمة..."
                 className="input-field !pr-11"
@@ -113,7 +147,7 @@ export default function ServicesPage() {
           {/* Quick category tabs */}
           <div className="mt-4 flex gap-2 overflow-x-auto no-scrollbar pb-1">
             <button
-              onClick={() => { setCategory(''); applyFilters(); }}
+              onClick={() => handleSelectCategory('')}
               className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
                 !category ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
@@ -123,7 +157,7 @@ export default function ServicesPage() {
             {categories.map((c) => (
               <button
                 key={c.id}
-                onClick={() => { setCategory(c.name); }}
+                onClick={() => handleSelectCategory(c.name)}
                 className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
                   category === c.name ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}

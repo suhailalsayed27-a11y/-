@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { MapPin, LogOut, Plus, ClipboardList, Star, Shield, Phone, Briefcase, Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon, ArrowRightLeft } from 'lucide-react';
+import {
+  MapPin, LogOut, Plus, ClipboardList, Star, Shield, Phone, Briefcase,
+  Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon,
+  ArrowRightLeft, Edit3, Trash2, RefreshCw
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStaticData } from '@/hooks/useStaticData';
@@ -9,13 +13,14 @@ import type { Listing, Order, Review } from '@/types';
 import ListingCard from '@/components/ListingCard';
 
 type Tab = 'services' | 'orders' | 'reviews' | 'edit' | 'wallet';
+type UserListing = Listing & { rejection_reason?: string | null };
 
 export default function ProfilePage() {
   const { profile, session, loading, signOut, refreshProfile } = useAuth();
-  const { cities } = useStaticData();
+  const { cities, categories, services } = useStaticData();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('services');
-  const [myListings, setMyListings] = useState<Listing[]>([]);
+  const [myListings, setMyListings] = useState<UserListing[]>([]);
   const [myOrders, setMyOrders] = useState<Order[]>([]);
   const [myReviews, setMyReviews] = useState<Review[]>([]);
 
@@ -23,7 +28,18 @@ export default function ProfilePage() {
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [transactions, setTransactions] = useState<any[]>([]);
 
-  // Edit form state
+  // Edit Listing & Resubmit Modal State
+  const [editingListing, setEditingListing] = useState<UserListing | null>(null);
+  const [editServiceName, setEditServiceName] = useState('');
+  const [editCategoryId, setEditCategoryId] = useState('');
+  const [editServiceCity, setEditServiceCity] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editExperience, setEditExperience] = useState('');
+  const [savingListing, setSavingListing] = useState(false);
+  const [listingEditError, setListingEditError] = useState<string | null>(null);
+
+  // Edit Profile form state
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editCity, setEditCity] = useState('');
@@ -42,6 +58,45 @@ export default function ProfilePage() {
     }
   }, [session, loading, navigate]);
 
+  const fetchUserData = async () => {
+    if (!profile) return;
+    // 1. Fetch Listings and Orders
+    const [listRes, orderRes] = await Promise.all([
+      supabase
+        .from('listings')
+        .select('*, category:categories(*), provider:profiles(*)')
+        .eq('provider_id', profile.id)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('orders')
+        .select('*, listing:listings(*, category:categories(*)), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*)')
+        .or(`client_id.eq.${profile.id},provider_id.eq.${profile.id}`)
+        .order('created_at', { ascending: false }),
+    ]);
+
+    setMyListings((listRes.data as UserListing[]) || []);
+    setMyOrders((orderRes.data as Order[]) || []);
+
+    // 2. Fetch Wallet & Transactions
+    const { data: wData } = await supabase.from('wallets').select('id, balance').eq('user_id', profile.id).maybeSingle();
+    if (wData) {
+      setWalletBalance(Number(wData.balance));
+      const { data: tData } = await supabase.from('wallet_transactions').select('*').eq('wallet_id', wData.id).order('created_at', { ascending: false });
+      setTransactions(tData || []);
+    }
+
+    // 3. Fetch Reviews
+    if ((listRes.data as UserListing[])?.length > 0) {
+      const listingIds = (listRes.data as UserListing[]).map((l) => l.id);
+      const revRes = await supabase
+        .from('reviews')
+        .select('*')
+        .in('listing_id', listingIds)
+        .order('created_at', { ascending: false });
+      setMyReviews((revRes.data as Review[]) || []);
+    }
+  };
+
   useEffect(() => {
     if (!profile) return;
     setEditName(profile.full_name);
@@ -50,44 +105,68 @@ export default function ProfilePage() {
     setEditBio(profile.bio || '');
     setEditAvatar(profile.avatar_url);
 
-    (async () => {
-      // 1. Fetch Listings and Orders
-      const [listRes, orderRes] = await Promise.all([
-        supabase
-          .from('listings')
-          .select('*, category:categories(*), provider:profiles(*)')
-          .eq('provider_id', profile.id)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('orders')
-          .select('*, listing:listings(*, category:categories(*)), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*)')
-          .or(`client_id.eq.${profile.id},provider_id.eq.${profile.id}`)
-          .order('created_at', { ascending: false }),
-      ]);
-      
-      setMyListings((listRes.data as Listing[]) || []);
-      setMyOrders((orderRes.data as Order[]) || []);
-
-      // 2. Fetch Wallet & Transactions
-      const { data: wData } = await supabase.from('wallets').select('id, balance').eq('user_id', profile.id).maybeSingle();
-      if (wData) {
-        setWalletBalance(Number(wData.balance));
-        const { data: tData } = await supabase.from('wallet_transactions').select('*').eq('wallet_id', wData.id).order('created_at', { ascending: false });
-        setTransactions(tData || []);
-      }
-
-      // 3. Fetch Reviews
-      if ((listRes.data as Listing[])?.length > 0) {
-        const listingIds = (listRes.data as Listing[]).map((l) => l.id);
-        const revRes = await supabase
-          .from('reviews')
-          .select('*')
-          .in('listing_id', listingIds)
-          .order('created_at', { ascending: false });
-        setMyReviews((revRes.data as Review[]) || []);
-      }
-    })();
+    fetchUserData();
   }, [profile]);
+
+  const openEditListing = (listing: UserListing) => {
+    setEditingListing(listing);
+    setEditServiceName(listing.service_name);
+    setEditCategoryId(listing.category_id);
+    setEditServiceCity(listing.city);
+    setEditDescription(listing.description || '');
+    setEditPrice(String(listing.price));
+    setEditExperience(listing.experience || '');
+    setListingEditError(null);
+  };
+
+  const handleUpdateAndResubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingListing || !profile) return;
+
+    if (!editServiceName.trim() || !editCategoryId || !editServiceCity || !editPrice) {
+      setListingEditError('يرجى ملء جميع الحقول المطلوبة');
+      return;
+    }
+
+    setSavingListing(true);
+    setListingEditError(null);
+
+    // الأدمن تبقى خدمته منشورة، ومقدم الخدمة العادي تعود للمراجعة (pending)
+    const nextStatus = profile.is_admin ? 'published' : 'pending';
+
+    const { error } = await supabase
+      .from('listings')
+      .update({
+        service_name: editServiceName.trim(),
+        category_id: editCategoryId,
+        city: editServiceCity,
+        description: editDescription.trim(),
+        price: Number(editPrice),
+        experience: editExperience.trim(),
+        status: nextStatus,
+        rejection_reason: null,
+      })
+      .eq('id', editingListing.id)
+      .eq('provider_id', profile.id);
+
+    setSavingListing(false);
+
+    if (error) {
+      setListingEditError(error.message || 'حدث خطأ أثناء تحديث الخدمة');
+      return;
+    }
+
+    setEditingListing(null);
+    fetchUserData();
+  };
+
+  const handleDeleteListing = async (id: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذه الخدمة؟')) return;
+    const { error } = await supabase.from('listings').delete().eq('id', id);
+    if (!error) {
+      setMyListings((prev) => prev.filter((item) => item.id !== id));
+    }
+  };
 
   const handleSaveProfile = async () => {
     if (!profile) return;
@@ -150,13 +229,14 @@ export default function ProfilePage() {
     return types[type] || type;
   };
 
+  const availableEditServices = services.filter((s) => s.category_id === editCategoryId);
+
   return (
     <div className="pb-20 md:pb-8">
       <div className="mx-auto max-w-4xl px-4 py-6">
         {/* Profile header */}
         <div className="card overflow-hidden mb-6">
           <div className="relative h-32 overflow-hidden bg-transparent">
-            
             <img
               src="/مهرة1.png"
               alt="شعار مَهَرَة"
@@ -232,8 +312,8 @@ export default function ProfilePage() {
         </div>
 
         {/* Real Wallet Banner */}
-        <div 
-          onClick={() => setTab('wallet')} 
+        <div
+          onClick={() => setTab('wallet')}
           className="card mb-6 flex cursor-pointer items-center justify-between gap-4 border-emerald-100 bg-emerald-50/60 p-4 transition-colors hover:bg-emerald-50"
         >
           <div className="flex items-center gap-3">
@@ -291,14 +371,73 @@ export default function ProfilePage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {myListings.map((l) => (
-                  <div key={l.id} className="relative">
-                    <ListingCard listing={l} />
-                    {l.status === 'pending' && (
-                      <span className="absolute top-2 right-2 z-10 badge bg-accent-100 text-accent-700">بانتظار المراجعة</span>
+                  <div key={l.id} className="flex flex-col">
+                    <div className="relative">
+                      <ListingCard listing={l} />
+                      {l.status === 'pending' && (
+                        <span className="absolute top-2 right-2 z-10 badge bg-accent-100 text-accent-700 shadow-sm">
+                          بانتظار المراجعة
+                        </span>
+                      )}
+                      {l.status === 'hidden' && (
+                        <span className="absolute top-2 right-2 z-10 badge bg-slate-200 text-slate-600 shadow-sm">
+                          مخفية
+                        </span>
+                      )}
+                      {l.status === 'rejected' && (
+                        <span className="absolute top-2 right-2 z-10 badge bg-error-100 text-error-700 shadow-sm">
+                          مرفوضة
+                        </span>
+                      )}
+                    </div>
+
+                    {/* سبب الرفض إن وجد */}
+                    {l.status === 'rejected' && (
+                      <div className="mt-2 rounded-xl border border-error-200 bg-error-50 p-3 text-xs text-error-800">
+                        <div className="flex items-center gap-1.5 font-bold text-error-700 mb-1">
+                          <AlertCircle size={14} className="shrink-0" />
+                          <span>تم رفض هذه الخدمة من الإدارة</span>
+                        </div>
+                        {l.rejection_reason && (
+                          <p className="leading-relaxed text-error-700">
+                            <span className="font-bold">السبب:</span> {l.rejection_reason}
+                          </p>
+                        )}
+                      </div>
                     )}
-                    {l.status === 'hidden' && (
-                      <span className="absolute top-2 right-2 z-10 badge bg-slate-200 text-slate-600">مخفية</span>
-                    )}
+
+                    {/* أزرار التعديل وإعادة الإرسال والحذف */}
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEditListing(l)}
+                        className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-colors ${
+                          l.status === 'rejected'
+                            ? 'bg-primary-600 text-white hover:bg-primary-700'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {l.status === 'rejected' ? (
+                          <>
+                            <RefreshCw size={14} />
+                            تعديل وإعادة إرسال
+                          </>
+                        ) : (
+                          <>
+                            <Edit3 size={14} />
+                            تعديل الخدمة
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteListing(l.id)}
+                        className="flex items-center justify-center rounded-xl bg-error-50 p-2 text-error-600 hover:bg-error-100 transition-colors"
+                        title="حذف الخدمة"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -342,7 +481,7 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {/* WALLET TAB (NEW) */}
+        {/* WALLET TAB */}
         {tab === 'wallet' && (
           <div className="space-y-4 animate-fade-in">
             <h2 className="text-lg font-bold text-slate-800">سجل العمليات المالية</h2>
@@ -529,6 +668,171 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* نافذة تعديل الخدمة وإعادة إرسالها للمراجعة */}
+      {editingListing && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
+          onClick={() => !savingListing && setEditingListing(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[90vh] overflow-y-auto animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-black text-slate-800">
+                {editingListing.status === 'rejected' ? 'تعديل الخدمة وإعادة إرسالها' : 'تعديل الخدمة'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => !savingListing && setEditingListing(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            {editingListing.status === 'rejected' && editingListing.rejection_reason && (
+              <div className="mb-4 rounded-xl border border-error-200 bg-error-50 p-3 text-xs text-error-800">
+                <p className="font-bold text-error-700 mb-0.5">ملاحظة الإدارة السابقة:</p>
+                <p>{editingListing.rejection_reason}</p>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateAndResubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">التصنيف *</label>
+                <select
+                  value={editCategoryId}
+                  onChange={(e) => setEditCategoryId(e.target.value)}
+                  required
+                  className="input-field"
+                >
+                  <option value="">اختر التصنيف</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">اسم الخدمة *</label>
+                {availableEditServices.length > 0 ? (
+                  <select
+                    value={editServiceName}
+                    onChange={(e) => setEditServiceName(e.target.value)}
+                    required
+                    className="input-field"
+                  >
+                    <option value="">اختر الخدمة</option>
+                    {!availableEditServices.some((s) => s.name === editServiceName) && editServiceName && (
+                      <option value={editServiceName}>{editServiceName}</option>
+                    )}
+                    {availableEditServices.map((s) => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editServiceName}
+                    onChange={(e) => setEditServiceName(e.target.value)}
+                    required
+                    className="input-field"
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">المدينة *</label>
+                <select
+                  value={editServiceCity}
+                  onChange={(e) => setEditServiceCity(e.target.value)}
+                  required
+                  className="input-field"
+                >
+                  <option value="">اختر المدينة</option>
+                  {cities.map((c) => (
+                    <option key={c.id} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1.5">السعر (ر.ي) *</label>
+                  <input
+                    type="number"
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(e.target.value)}
+                    required
+                    min="0"
+                    className="input-field"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1.5">الخبرة</label>
+                  <input
+                    type="text"
+                    value={editExperience}
+                    onChange={(e) => setEditExperience(e.target.value)}
+                    placeholder="مثال: 5 سنوات"
+                    className="input-field"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">الوصف</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={4}
+                  placeholder="اشرح خدمتك بالتفصيل..."
+                  className="input-field resize-none"
+                />
+              </div>
+
+              {!profile.is_admin && (
+                <p className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3">
+                  ملاحظة: بعد حفظ التعديلات سيتم إرسال الخدمة تلقائياً إلى الإدارة لمراجعتها والموافقة عليها.
+                </p>
+              )}
+
+              {listingEditError && (
+                <div className="rounded-xl bg-error-50 px-4 py-3 text-sm text-error-700">
+                  {listingEditError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingListing(null)}
+                  disabled={savingListing}
+                  className="btn-ghost flex-1 !bg-slate-100"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingListing}
+                  className="btn-primary flex-1"
+                >
+                  {savingListing ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      جاري الإرسال...
+                    </span>
+                  ) : (
+                    'حفظ وإعادة إرسال للمراجعة'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
