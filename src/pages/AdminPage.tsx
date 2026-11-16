@@ -1642,7 +1642,7 @@ function DisputesSection() {
                   </p>
                   <p className="text-xs text-slate-500 flex items-center gap-1.5">
                     <MapPin size={14} className="text-slate-400 shrink-0" />
-                    <span>{client?.city || 'المدينة غير محددة'}</span>
+                    <span>{client?.city || (selectedDispute.order as any)?.city || listing?.city || 'المدينة غير محددة'}</span>
                   </p>
                 </div>
 
