@@ -686,50 +686,108 @@ function ListingEditModal({ listing, onClose, onSaved }: { listing: Listing | nu
 }
 
 // ============ CATEGORIES ============
+const ICON_EMOJIS: Record<string, string> = {
+  Laptop: '💻',
+  Briefcase: '💼',
+  UtensilsCrossed: '🍔',
+  Sparkles: '💄',
+  Camera: '📷',
+  Wrench: '🔧',
+  Tool: '🛠️',
+  GraduationCap: '🎓',
+  Car: '🚗',
+  Home: '🏠',
+  HeartPulse: '🩺',
+  Palette: '🎨',
+  Truck: '🚚',
+  ShoppingBag: '🛍️',
+};
+
 function CategoriesSection() {
   const { categories, services, reload } = useStaticData();
   const [editing, setEditing] = useState<Category | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showAddService, setShowAddService] = useState<string | null>(null);
   const [newServiceName, setNewServiceName] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const updateCategory = async (id: string, name: string, iconName: string) => {
-    await supabase.from('categories').update({ name, icon_name: iconName }).eq('id', id);
-    reload();
+    setBusy(true);
+    const { error } = await supabase
+      .from('categories')
+      .update({ name: name.trim(), icon_name: iconName })
+      .eq('id', id);
+    setBusy(false);
+
+    if (error) {
+      alert('تعذر تعديل التصنيف: ' + error.message);
+      return;
+    }
+    await reload();
     setEditing(null);
   };
 
   const deleteCategory = async (id: string) => {
     if (!confirm('حذف هذا التصنيف سيحذف جميع الخدمات بداخله. هل أنت متأكد؟')) return;
-    await supabase.from('categories').delete().eq('id', id);
-    reload();
+    setBusy(true);
+    await supabase.from('services_catalog').delete().eq('category_id', id);
+    const { error } = await supabase.from('categories').delete().eq('id', id);
+    setBusy(false);
+
+    if (error) {
+      alert('تعذر حذف التصنيف (قد يكون مرتبطاً بخدمات منشورة للمستخدمين): ' + error.message);
+      return;
+    }
+    await reload();
   };
 
-  const addCategory = async (name: string, iconName: string) => {
-    await supabase.from('categories').insert({ name, icon_name: iconName });
-    reload();
+  const addCategory = async (_id: string, name: string, iconName: string) => {
+    setBusy(true);
+    const { error } = await supabase
+      .from('categories')
+      .insert({ name: name.trim(), icon_name: iconName });
+    setBusy(false);
+
+    if (error) {
+      alert('تعذر إضافة التصنيف: ' + error.message);
+      return;
+    }
+    await reload();
     setShowAdd(false);
   };
 
   const addService = async (categoryId: string) => {
-    if (!newServiceName.trim()) return;
+    if (!newServiceName.trim() || busy) return;
+    setBusy(true);
     const maxOrder = services.filter((s) => s.category_id === categoryId).length;
-    await supabase.from('services_catalog').insert({ category_id: categoryId, name: newServiceName, sort_order: maxOrder + 1 });
+    const { error } = await supabase
+      .from('services_catalog')
+      .insert({ category_id: categoryId, name: newServiceName.trim(), sort_order: maxOrder + 1 });
+    setBusy(false);
+
+    if (error) {
+      alert('تعذر إضافة الخدمة: ' + error.message);
+      return;
+    }
     setNewServiceName('');
     setShowAddService(null);
-    reload();
+    await reload();
   };
 
   const deleteService = async (id: string) => {
     if (!confirm('حذف هذه الخدمة؟')) return;
-    await supabase.from('services_catalog').delete().eq('id', id);
-    reload();
+    const { error } = await supabase.from('services_catalog').delete().eq('id', id);
+    if (error) {
+      alert('تعذر حذف الخدمة: ' + error.message);
+      return;
+    }
+    await reload();
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-bold text-slate-800">التصنيفات والخدمات</h2>
+        <h2 className="font-bold text-slate-800">التصنيفات والخدمات ({categories.length})</h2>
         <button onClick={() => setShowAdd(true)} className="btn-primary !py-2 !text-sm">
           <Plus size={18} /> إضافة تصنيف
         </button>
@@ -738,21 +796,28 @@ function CategoriesSection() {
       <div className="space-y-3">
         {categories.map((cat) => {
           const catServices = services.filter((s) => s.category_id === cat.id);
+          const emoji = ICON_EMOJIS[cat.icon_name] || '✨';
           return (
             <div key={cat.id} className="card p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xl">
-                    {cat.name === 'التقنية والرقمية' ? '💻' : cat.name === 'الأعمال والإدارة' ? '💼' : cat.name === 'المطاعم والضيافة' ? '🍔' : cat.name === 'الحرف اليدوية' ? '🔧' : '✨'}
-                  </span>
+                  <span className="text-xl">{emoji}</span>
                   <span className="font-bold text-slate-800">{cat.name}</span>
                   <span className="badge bg-slate-100 text-slate-500">{catServices.length} خدمة</span>
                 </div>
                 <div className="flex gap-1.5">
-                  <button onClick={() => setEditing(cat)} className="btn-ghost !bg-blue-50 !text-blue-600 !px-2.5 !py-1.5">
+                  <button
+                    onClick={() => setEditing(cat)}
+                    className="btn-ghost !bg-blue-50 !text-blue-600 !px-2.5 !py-1.5"
+                    title="تعديل التصنيف والأيقونة"
+                  >
                     <Edit3 size={16} />
                   </button>
-                  <button onClick={() => deleteCategory(cat.id)} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5">
+                  <button
+                    onClick={() => deleteCategory(cat.id)}
+                    className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5"
+                    title="حذف التصنيف"
+                  >
                     <Trash2 size={16} />
                   </button>
                 </div>
@@ -761,13 +826,20 @@ function CategoriesSection() {
               {/* Services list */}
               <div className="flex flex-wrap gap-2">
                 {catServices.map((s) => (
-                  <span key={s.id} className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-1.5 text-sm text-slate-600">
+                  <span key={s.id} className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-1.5 text-sm text-slate-600 border border-slate-100">
                     {s.name}
-                    <button onClick={() => deleteService(s.id)} className="text-slate-300 hover:text-error-500">
+                    <button
+                      onClick={() => deleteService(s.id)}
+                      className="text-slate-400 hover:text-error-500 transition-colors"
+                      title="حذف الخدمة"
+                    >
                       <X size={14} />
                     </button>
                   </span>
                 ))}
+                {catServices.length === 0 && (
+                  <span className="text-xs text-slate-400">لا توجد خدمات فرعية في هذا التصنيف بعد</span>
+                )}
               </div>
 
               {showAddService === cat.id ? (
@@ -779,8 +851,13 @@ function CategoriesSection() {
                     placeholder="اسم الخدمة الجديدة"
                     className="input-field !py-2 !text-sm"
                     onKeyDown={(e) => e.key === 'Enter' && addService(cat.id)}
+                    autoFocus
                   />
-                  <button onClick={() => addService(cat.id)} className="btn-primary !px-3 !py-2 !text-sm">
+                  <button
+                    onClick={() => addService(cat.id)}
+                    disabled={busy || !newServiceName.trim()}
+                    className="btn-primary !px-3 !py-2 !text-sm disabled:opacity-50"
+                  >
                     <Plus size={16} />
                   </button>
                   <button onClick={() => setShowAddService(null)} className="btn-ghost !bg-slate-100 !px-3">
@@ -801,45 +878,67 @@ function CategoriesSection() {
       </div>
 
       {editing && (
-        <CategoryEditModal category={editing} onClose={() => setEditing(null)} onSave={updateCategory} />
+        <CategoryEditModal category={editing} onClose={() => setEditing(null)} onSave={updateCategory} saving={busy} />
       )}
       {showAdd && (
-        <CategoryEditModal category={null} onClose={() => setShowAdd(false)} onSave={addCategory} />
+        <CategoryEditModal category={null} onClose={() => setShowAdd(false)} onSave={addCategory} saving={busy} />
       )}
     </div>
   );
 }
 
-function CategoryEditModal({ category, onClose, onSave }: { category: Category | null; onClose: () => void; onSave: (id: string, name: string, icon: string) => void }) {
+function CategoryEditModal({
+  category,
+  onClose,
+  onSave,
+  saving = false,
+}: {
+  category: Category | null;
+  onClose: () => void;
+  onSave: (id: string, name: string, icon: string) => void;
+  saving?: boolean;
+}) {
   const [name, setName] = useState(category?.name || '');
   const [icon, setIcon] = useState(category?.icon_name || 'Briefcase');
 
   return (
-    <Modal title={category ? 'تعديل التصنيف' : 'إضافة تصنيف'} onClose={onClose}>
+    <Modal title={category ? 'تعديل التصنيف والأيقونة' : 'إضافة تصنيف جديد'} onClose={onClose}>
       <div className="space-y-3">
         <div>
           <label className="block text-sm font-bold text-slate-700 mb-1.5">اسم التصنيف</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input-field" />
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="مثال: الصيانة والكهرباء"
+            className="input-field"
+          />
         </div>
         <div>
           <label className="block text-sm font-bold text-slate-700 mb-1.5">الأيقونة</label>
           <select value={icon} onChange={(e) => setIcon(e.target.value)} className="input-field">
-            <option value="Laptop">💻 تقنية</option>
-            <option value="Briefcase">💼 أعمال</option>
-            <option value="UtensilsCrossed">🍔 مطاعم</option>
-            <option value="Sparkles">💄 جمال</option>
-            <option value="Camera">📷 تصوير</option>
-            <option value="Wrench">🔧 صيانة</option>
-            <option value="Tool">🛠️ أدوات وحرف</option>
-            <option value="GraduationCap">🎓 تعليم</option>
+            <option value="Laptop">💻 تقنية ورقمية</option>
+            <option value="Briefcase">💼 أعمال وإدارة</option>
+            <option value="UtensilsCrossed">🍔 مطاعم وضيافة</option>
+            <option value="Sparkles">💄 جمال وعناية</option>
+            <option value="Camera">📷 تصوير ومونتاج</option>
+            <option value="Wrench">🔧 صيانة وإصلاح</option>
+            <option value="Tool">🛠️ أدوات وحرف يدوية</option>
+            <option value="GraduationCap">🎓 تعليم وتدريب</option>
+            <option value="Car">🚗 سيارات وميكانيك</option>
+            <option value="Home">🏠 خدمات منزلية</option>
+            <option value="HeartPulse">🩺 صحة وطب</option>
+            <option value="Palette">🎨 تصميم وفنون</option>
+            <option value="Truck">🚚 نقل وتوصيل</option>
+            <option value="ShoppingBag">🛍️ تسوق وتجارة</option>
           </select>
         </div>
         <button
           onClick={() => onSave(category?.id || '', name, icon)}
-          disabled={!name}
-          className="btn-primary w-full"
+          disabled={!name.trim() || saving}
+          className="btn-primary w-full disabled:opacity-50"
         >
-          حفظ
+          {saving ? 'جاري الحفظ...' : 'حفظ'}
         </button>
       </div>
     </Modal>
@@ -1546,6 +1645,7 @@ function DisputesSection() {
         const listing = selectedDispute.order?.listing;
         const client = selectedDispute.order?.client;
         const provider = selectedDispute.order?.provider;
+        const orderCity = (selectedDispute.order as any)?.city;
 
         return (
           <div
@@ -1613,7 +1713,7 @@ function DisputesSection() {
                     <span className="font-bold text-slate-700">قيمة الخدمة:</span> {formatYER(selectedDispute.order?.service_price || 0)} ريال
                   </p>
                   <p className="text-slate-600">
-                    <span className="font-bold text-slate-700">مدينة الخدمة:</span> {listing?.city || 'غير محدد'}
+                    <span className="font-bold text-slate-700">مدينة الخدمة:</span> {listing?.city || orderCity || 'غير محدد'}
                   </p>
                 </div>
               </div>
@@ -1642,7 +1742,7 @@ function DisputesSection() {
                   </p>
                   <p className="text-xs text-slate-500 flex items-center gap-1.5">
                     <MapPin size={14} className="text-slate-400 shrink-0" />
-                    <span>{client?.city || (selectedDispute.order as any)?.city || listing?.city || 'المدينة غير محددة'}</span>
+                    <span>{client?.city || orderCity || listing?.city || 'المدينة غير محددة'}</span>
                   </p>
                 </div>
 
@@ -1668,7 +1768,7 @@ function DisputesSection() {
                   </p>
                   <p className="text-xs text-slate-500 flex items-center gap-1.5">
                     <MapPin size={14} className="text-slate-400 shrink-0" />
-                    <span>{provider?.city || listing?.city || (selectedDispute.order as any)?.city || 'المدينة غير محددة'}</span>
+                    <span>{provider?.city || listing?.city || orderCity || 'المدينة غير محددة'}</span>
                   </p>
                 </div>
               </div>
