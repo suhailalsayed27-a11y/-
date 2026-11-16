@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/types';
 
@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       if (data.session) {
-        loadProfile(data.session.user.id);
+        loadProfile(data.session.user);
       } else {
         setLoading(false);
       }
@@ -33,9 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       if (newSession) {
-        (async () => {
-          await loadProfile(newSession.user.id);
-        })();
+        loadProfile(newSession.user);
       } else {
         setProfile(null);
         setLoading(false);
@@ -45,20 +43,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => authListener.subscription.unsubscribe();
   }, []);
 
-  async function loadProfile(userId: string) {
+  async function loadProfile(user: User) {
     const { data } = await supabase
       .from('profiles')
       .select('*')
-      .eq('auth_user_id', userId)
+      .eq('auth_user_id', user.id)
       .maybeSingle();
 
-    setProfile(data as Profile | null);
+    if (data) {
+      setProfile(data as Profile);
+      setLoading(false);
+      return;
+    }
+
+    // في حال تأخر إنشاء الملف الشخصي لحظة التسجيل، ننشئه مباشرة عبر auth_user_id
+    const { data: created } = await supabase
+      .from('profiles')
+      .insert({
+        auth_user_id: user.id,
+        full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'مستخدم جديد',
+        email: user.email,
+        account_type: user.user_metadata?.account_type || 'client',
+      })
+      .select('*')
+      .maybeSingle();
+
+    setProfile((created as Profile) || null);
     setLoading(false);
   }
 
   async function refreshProfile() {
     if (session) {
-      await loadProfile(session.user.id);
+      await loadProfile(session.user);
     }
   }
 
