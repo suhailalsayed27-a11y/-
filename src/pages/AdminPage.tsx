@@ -1302,30 +1302,83 @@ function DisputesSection() {
   const [actionLoading, setActionLoading] = useState(false);
 
   const loadDisputes = async () => {
-    const { data } = await supabase
+    setLoading(true);
+    const { data: rawDisputes, error } = await supabase
       .from('disputes')
-      .select('*, order:orders(*, listing:listings(*, category:categories(*)), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*)), opener:profiles!disputes_opened_by_fkey(*)')
+      .select('*')
       .order('created_at', { ascending: false });
 
-    const list = (data as DetailedDispute[]) || [];
-    setDisputes(list);
-
-    const orderIds = Array.from(new Set(list.map((d) => d.order_id).filter(Boolean)));
-    if (orderIds.length > 0) {
-      const { data: logsData } = await supabase
-        .from('order_logs')
-        .select('*')
-        .in('order_id', orderIds)
-        .order('created_at', { ascending: true });
-
-      const grouped: Record<string, OrderLogItem[]> = {};
-      ((logsData as OrderLogItem[]) || []).forEach((log) => {
-        if (!grouped[log.order_id]) grouped[log.order_id] = [];
-        grouped[log.order_id].push(log);
-      });
-      setOrderLogs(grouped);
+    if (error || !rawDisputes) {
+      console.error('Error loading disputes:', error);
+      setLoading(false);
+      return;
     }
 
+    const orderIds = Array.from(new Set(rawDisputes.map((d) => d.order_id).filter(Boolean)));
+
+    const [ordersRes, logsRes] = await Promise.all([
+      orderIds.length > 0
+        ? supabase.from('orders').select('*').in('id', orderIds)
+        : Promise.resolve({ data: [] }),
+      orderIds.length > 0
+        ? supabase.from('order_logs').select('*').in('order_id', orderIds).order('created_at', { ascending: true })
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const ordersList = (ordersRes.data as Order[]) || [];
+    const listingIds = Array.from(new Set(ordersList.map((o) => o.listing_id).filter(Boolean)));
+    const profileIds = Array.from(
+      new Set([
+        ...rawDisputes.map((d) => d.opened_by),
+        ...ordersList.map((o) => o.client_id),
+        ...ordersList.map((o) => o.provider_id),
+      ].filter(Boolean))
+    );
+
+    const [listingsRes, categoriesRes, profilesRes] = await Promise.all([
+      listingIds.length > 0
+        ? supabase.from('listings').select('*').in('id', listingIds)
+        : Promise.resolve({ data: [] }),
+      supabase.from('categories').select('*'),
+      profileIds.length > 0
+        ? supabase.from('profiles').select('*').in('id', profileIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const categoriesMap = new Map(((categoriesRes.data as Category[]) || []).map((c) => [c.id, c]));
+    const listingsMap = new Map(
+      ((listingsRes.data as Listing[]) || []).map((l) => [
+        l.id,
+        { ...l, category: categoriesMap.get(l.category_id) },
+      ])
+    );
+    const profilesMap = new Map(((profilesRes.data as Profile[]) || []).map((p) => [p.id, p]));
+    const ordersMap = new Map(
+      ordersList.map((o) => [
+        o.id,
+        {
+          ...o,
+          listing: listingsMap.get(o.listing_id),
+          client: profilesMap.get(o.client_id),
+          provider: profilesMap.get(o.provider_id),
+        },
+      ])
+    );
+
+    const enrichedDisputes: DetailedDispute[] = rawDisputes.map((d) => ({
+      ...d,
+      order: ordersMap.get(d.order_id),
+      opener: profilesMap.get(d.opened_by),
+    }));
+
+    const groupedLogs: Record<string, OrderLogItem[]> = {};
+    ((logsRes.data as OrderLogItem[]) || []).forEach((log) => {
+      if (!groupedLogs[log.order_id]) groupedLogs[log.order_id] = [];
+      groupedLogs[log.order_id].push(log);
+    });
+
+    setOrderLogs(groupedLogs);
+    setDisputes(enrichedDisputes);
     setLoading(false);
   };
 
@@ -1620,7 +1673,7 @@ function DisputesSection() {
                 </div>
               </div>
 
-              {/* الخط الزمني للتواريخ */}
+              {/* الخط الزمني للتواريخ والأوقات */}
               <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
                 <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
                   <Clock size={16} className="text-primary-600" />
@@ -1629,31 +1682,31 @@ function DisputesSection() {
 
                 <div className="space-y-2.5 text-xs border-r-2 border-primary-200 pr-3 mr-1">
                   <div>
-                    <p className="font-bold text-slate-700">1. تاريخ نشر الخدمة في المنصة</p>
+                    <p className="font-bold text-slate-700">1. تاريخ ووقت نشر الخدمة في المنصة</p>
                     <p className="text-slate-500">{formatDateTime(listing?.created_at)}</p>
                   </div>
 
                   <div>
-                    <p className="font-bold text-slate-700">2. تاريخ طلب العميل للخدمة</p>
+                    <p className="font-bold text-slate-700">2. تاريخ ووقت طلب العميل للخدمة</p>
                     <p className="text-slate-500">{formatDateTime(selectedDispute.order?.created_at)}</p>
                   </div>
 
                   <div>
-                    <p className="font-bold text-slate-700">3. تاريخ قبول مقدم الخدمة للطلب</p>
+                    <p className="font-bold text-slate-700">3. تاريخ ووقت قبول مقدم الخدمة للطلب</p>
                     <p className="text-slate-500">
                       {info.acceptedAt ? formatDateTime(info.acceptedAt) : 'لم يُسجل قبول (حدث النزاع قبل القبول أو لم يُحفظ في السجل)'}
                     </p>
                   </div>
 
                   <div>
-                    <p className="font-bold text-slate-700">4. تاريخ تسليم الخدمة</p>
+                    <p className="font-bold text-slate-700">4. تاريخ ووقت تسليم الخدمة</p>
                     <p className="text-slate-500">
                       {info.deliveredAt ? formatDateTime(info.deliveredAt) : 'لم يتم التسليم بعد (حدث النزاع قبل مرحلة التسليم)'}
                     </p>
                   </div>
 
                   <div>
-                    <p className="font-bold text-error-600">5. تاريخ رفع النزاع ({info.openerRole})</p>
+                    <p className="font-bold text-error-600">5. تاريخ ووقت رفع النزاع ({info.openerRole})</p>
                     <p className="text-slate-600 font-medium">{formatDateTime(selectedDispute.created_at)}</p>
                   </div>
                 </div>
