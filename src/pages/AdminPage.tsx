@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Tag, MapPin, Users, ClipboardList, Settings,
   LogOut, Menu, X, CheckCircle, XCircle, Eye, EyeOff, Trash2, Edit3, Plus,
   TrendingUp, UserCheck, Package, ArrowLeft, Search, Star, Shield,
-  Megaphone, Loader2, Scale, Wallet, ArrowRightLeft,
+  Megaphone, Loader2, Scale, Wallet, ArrowRightLeft, Clock, Phone, Mail, User, AlertTriangle,
   type LucideIcon
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -143,7 +143,6 @@ export default function AdminPage() {
           {section === 'cities' && <CitiesSection />}
           {section === 'users' && <UsersSection />}
           {section === 'providers' && <ProvidersSection />}
-          {section === 'orders' && <DisputesSection />}
           {section === 'orders' && <OrdersSection />}
           {section === 'disputes' && <DisputesSection />}
           {section === 'finance' && <FinanceSection />}
@@ -1274,9 +1273,29 @@ function OrdersSection() {
 }
 
 // ============ DISPUTES ============
+interface OrderLogItem {
+  id: string;
+  order_id: string;
+  status_from: string | null;
+  status_to: string;
+  note: string | null;
+  created_at: string;
+}
+
+type DetailedDispute = Dispute & {
+  order?: Order & {
+    listing?: Listing & { category?: Category };
+    client?: Profile;
+    provider?: Profile;
+  };
+  opener?: Profile;
+};
+
 function DisputesSection() {
-  const [disputes, setDisputes] = useState<(Dispute & { order?: Order; opener?: Profile })[]>([]);
+  const [disputes, setDisputes] = useState<DetailedDispute[]>([]);
+  const [orderLogs, setOrderLogs] = useState<Record<string, OrderLogItem[]>>({});
   const [loading, setLoading] = useState(true);
+  const [selectedDispute, setSelectedDispute] = useState<DetailedDispute | null>(null);
   const [resolveModal, setResolveModal] = useState<string | null>(null);
   const [resolution, setResolution] = useState('');
   const [outcome, setOutcome] = useState('');
@@ -1285,9 +1304,28 @@ function DisputesSection() {
   const loadDisputes = async () => {
     const { data } = await supabase
       .from('disputes')
-      .select('*, order:orders(*, listing:listings(*), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*)), opener:profiles!disputes_opened_by_fkey(*)')
+      .select('*, order:orders(*, listing:listings(*, category:categories(*)), client:profiles!orders_client_id_fkey(*), provider:profiles!orders_provider_id_fkey(*)), opener:profiles!disputes_opened_by_fkey(*)')
       .order('created_at', { ascending: false });
-    setDisputes((data as (Dispute & { order?: Order; opener?: Profile })[]) || []);
+
+    const list = (data as DetailedDispute[]) || [];
+    setDisputes(list);
+
+    const orderIds = Array.from(new Set(list.map((d) => d.order_id).filter(Boolean)));
+    if (orderIds.length > 0) {
+      const { data: logsData } = await supabase
+        .from('order_logs')
+        .select('*')
+        .in('order_id', orderIds)
+        .order('created_at', { ascending: true });
+
+      const grouped: Record<string, OrderLogItem[]> = {};
+      ((logsData as OrderLogItem[]) || []).forEach((log) => {
+        if (!grouped[log.order_id]) grouped[log.order_id] = [];
+        grouped[log.order_id].push(log);
+      });
+      setOrderLogs(grouped);
+    }
+
     setLoading(false);
   };
 
@@ -1304,6 +1342,7 @@ function DisputesSection() {
     setActionLoading(false);
     if (error) { alert(error.message); return; }
     setResolveModal(null);
+    setSelectedDispute(null);
     setResolution('');
     setOutcome('');
     loadDisputes();
@@ -1314,63 +1353,345 @@ function DisputesSection() {
   const STATUS_LABELS: Record<string, string> = {
     open: 'مفتوح', under_review: 'قيد المراجعة',
     resolved_customer: 'حُل لصالح العميل', resolved_provider: 'حُل لصالح مقدم الخدمة',
-    resolved_partial: 'حل جزري',
+    resolved_partial: 'حل جزئي',
+  };
+
+  const STAGE_LABELS: Record<string, string> = {
+    new: 'بعد إنشاء الطلب مباشرة (قبل قبول مقدم الخدمة)',
+    in_progress: 'أثناء تنفيذ الخدمة (قيد التنفيذ)',
+    provider_completed: 'بعد إعلان مقدم الخدمة إنجاز العمل',
+    awaiting_customer_confirmation: 'بعد تسليم الخدمة (بانتظار تأكيد العميل)',
+    completed: 'بعد اكتمال الطلب',
+    cancelled: 'بعد إلغاء الطلب',
+    confirmation_expired: 'بعد انتهاء مهلة التأكيد',
+  };
+
+  const formatDateTime = (dateStr?: string | null) => {
+    if (!dateStr) return 'غير مسجل';
+    return new Date(dateStr).toLocaleString('ar-EG', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getDisputeLifecycle = (d: DetailedDispute) => {
+    const logs = orderLogs[d.order_id] || [];
+    const acceptedLog = logs.find((l) => l.status_to === 'in_progress');
+    const deliveredLog = [...logs].reverse().find((l) =>
+      l.status_to === 'provider_completed' || l.status_to === 'awaiting_customer_confirmation'
+    );
+    const disputeLog = logs.find((l) => l.status_to === 'disputed');
+    const previousStageKey = disputeLog?.status_from
+      || (deliveredLog ? 'awaiting_customer_confirmation' : acceptedLog ? 'in_progress' : 'new');
+
+    const isOpenedByProvider = d.opened_by === d.order?.provider_id;
+    const isOpenedByClient = d.opened_by === d.order?.client_id;
+
+    return {
+      acceptedAt: acceptedLog?.created_at || null,
+      deliveredAt: deliveredLog?.created_at || null,
+      stageLabel: STAGE_LABELS[previousStageKey] || previousStageKey,
+      openerRole: isOpenedByProvider ? 'مقدم الخدمة' : isOpenedByClient ? 'العميل' : 'طرف في الطلب',
+      isOpenedByProvider,
+    };
   };
 
   return (
     <div className="space-y-4">
-      <h2 className="font-bold text-slate-800">النزاعات</h2>
+      <h2 className="font-bold text-slate-800">النزاعات ({disputes.length})</h2>
 
       {disputes.length === 0 ? (
         <EmptyState text="لا توجد نزاعات" />
       ) : (
         <div className="space-y-3">
-          {disputes.map((d) => (
-            <div key={d.id} className="card p-5">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div>
-                  <span className={`badge ${d.status === 'open' ? 'bg-error-100 text-error-700' : 'bg-success-100 text-success-700'}`}>
-                    {STATUS_LABELS[d.status] || d.status}
-                  </span>
-                </div>
-                <span className="text-xs text-slate-400">{new Date(d.created_at).toLocaleDateString('ar-EG')}</span>
-              </div>
+          {disputes.map((d) => {
+            const info = getDisputeLifecycle(d);
+            const categoryName = d.order?.listing?.category?.name;
 
-              <div className="space-y-2">
-                <div>
-                  <p className="text-sm font-bold text-slate-700">السبب: {d.reason}</p>
-                  <p className="text-sm text-slate-600 mt-1">{d.details}</p>
-                </div>
-                <div className="text-sm text-slate-500 border-t border-slate-100 pt-2">
-                  <p>الخدمة: {d.order?.listing?.service_name || 'غير محدد'}</p>
-                  <p>العميل: {d.opener?.full_name}</p>
-                  <p>قيمة الطلب: {formatYER(d.order?.service_price || 0)} ريال</p>
-                </div>
-                {d.admin_resolution && (
-                  <div className="rounded-xl bg-slate-50 p-3 mt-2">
-                    <p className="text-xs font-bold text-slate-500">قرار الأدمن:</p>
-                    <p className="text-sm text-slate-600">{d.admin_resolution}</p>
+            return (
+              <div
+                key={d.id}
+                onClick={() => setSelectedDispute(d)}
+                className="card p-5 cursor-pointer transition-all hover:ring-2 hover:ring-primary-200"
+              >
+                <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`badge ${d.status === 'open' ? 'bg-error-100 text-error-700' : 'bg-success-100 text-success-700'}`}>
+                      {STATUS_LABELS[d.status] || d.status}
+                    </span>
+                    <span className={`badge ${info.isOpenedByProvider ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                      فاتح النزاع: {info.openerRole} ({d.opener?.full_name || 'غير معروف'})
+                    </span>
                   </div>
-                )}
-              </div>
+                  <span className="text-xs text-slate-400">{formatDateTime(d.created_at)}</span>
+                </div>
 
-              {d.status === 'open' && (
-                <button
-                  onClick={() => setResolveModal(d.id)}
-                  className="btn-primary mt-3 !py-2 !text-sm"
-                >
-                  <Scale size={16} />
-                  اتخاذ قرار
-                </button>
-              )}
-            </div>
-          ))}
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">السبب: {d.reason}</p>
+                    {d.details && <p className="text-sm text-slate-600 mt-1 line-clamp-2">{d.details}</p>}
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 p-3 text-sm space-y-1.5 border border-slate-100">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-slate-700">الخدمة:</span>
+                      <span className="text-slate-800">{d.order?.listing?.service_name || 'غير محدد'}</span>
+                      {categoryName && (
+                        <span className="badge bg-primary-100 text-primary-700">
+                          النوع: {categoryName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                      <span><strong className="text-slate-700">العميل:</strong> {d.order?.client?.full_name || 'غير محدد'}</span>
+                      <span><strong className="text-slate-700">مقدم الخدمة:</strong> {d.order?.provider?.full_name || 'غير محدد'}</span>
+                      <span><strong className="text-slate-700">قيمة الطلب:</strong> {formatYER(d.order?.service_price || 0)} ريال</span>
+                    </div>
+                    <p className="text-xs text-amber-700 font-medium pt-0.5">
+                      مرحلة النزاع: {info.stageLabel}
+                    </p>
+                  </div>
+
+                  {d.admin_resolution && (
+                    <div className="rounded-xl bg-success-50/70 border border-success-100 p-3 mt-2">
+                      <p className="text-xs font-bold text-success-700">قرار الأدمن:</p>
+                      <p className="text-sm text-slate-700">{d.admin_resolution}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => setSelectedDispute(d)}
+                    className="btn-secondary !py-2 !px-3.5 !text-xs"
+                  >
+                    <Eye size={15} />
+                    عرض كل التفاصيل والخط الزمني
+                  </button>
+                  {d.status === 'open' && (
+                    <button
+                      onClick={() => setResolveModal(d.id)}
+                      className="btn-primary !py-2 !px-3.5 !text-xs"
+                    >
+                      <Scale size={15} />
+                      اتخاذ قرار
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
+      {/* نافذة تفاصيل النزاع الكاملة */}
+      {selectedDispute && (() => {
+        const info = getDisputeLifecycle(selectedDispute);
+        const listing = selectedDispute.order?.listing;
+        const client = selectedDispute.order?.client;
+        const provider = selectedDispute.order?.provider;
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4"
+            onClick={() => setSelectedDispute(null)}
+          >
+            <div
+              className="w-full max-w-2xl rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[90vh] overflow-y-auto animate-slide-up space-y-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-black text-slate-800">تفاصيل النزاع الكاملة</h3>
+                    <span className={`badge ${selectedDispute.status === 'open' ? 'bg-error-100 text-error-700' : 'bg-success-100 text-success-700'}`}>
+                      {STATUS_LABELS[selectedDispute.status] || selectedDispute.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1" dir="ltr">
+                    Dispute #{selectedDispute.id.slice(0, 8)} • Order #{selectedDispute.order_id?.slice(0, 8)}
+                  </p>
+                </div>
+                <button onClick={() => setSelectedDispute(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                  <X size={22} />
+                </button>
+              </div>
+
+              {/* تنبيه فاتح النزاع والمرحلة */}
+              <div className="rounded-2xl bg-error-50 border border-error-100 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-error-700 font-bold text-sm">
+                  <AlertTriangle size={18} />
+                  <span>
+                    رفع النزاع: {info.openerRole} ({selectedDispute.opener?.full_name || 'غير معروف'})
+                  </span>
+                </div>
+                <p className="text-xs text-error-800">
+                  <strong>المرحلة التي حدث فيها النزاع:</strong> {info.stageLabel}
+                </p>
+                <div className="pt-1 border-t border-error-200/60">
+                  <p className="text-sm font-bold text-slate-800">السبب: {selectedDispute.reason}</p>
+                  {selectedDispute.details && (
+                    <p className="text-sm text-slate-700 mt-1 leading-relaxed">{selectedDispute.details}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* بيانات الخدمة ونوعها */}
+              <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-2">
+                <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                  <Package size={16} className="text-primary-600" />
+                  بيانات الخدمة والطلب
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                  <p className="text-slate-600">
+                    <span className="font-bold text-slate-700">اسم الخدمة:</span> {listing?.service_name || 'غير محدد'}
+                  </p>
+                  <p className="text-slate-600">
+                    <span className="font-bold text-slate-700">نوع / تصنيف الخدمة:</span>{' '}
+                    <span className="badge bg-primary-100 text-primary-700">
+                      {listing?.category?.name || 'غير محدد'}
+                    </span>
+                  </p>
+                  <p className="text-slate-600">
+                    <span className="font-bold text-slate-700">قيمة الخدمة:</span> {formatYER(selectedDispute.order?.service_price || 0)} ريال
+                  </p>
+                  <p className="text-slate-600">
+                    <span className="font-bold text-slate-700">مدينة الخدمة:</span> {listing?.city || 'غير محدد'}
+                  </p>
+                </div>
+              </div>
+
+              {/* بيانات العميل ومقدم الخدمة */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* العميل */}
+                <div className={`rounded-2xl border p-4 space-y-2 ${!info.isOpenedByProvider ? 'border-blue-300 bg-blue-50/40' : 'border-slate-200 bg-white'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full">بيانات العميل</span>
+                    {!info.isOpenedByProvider && (
+                      <span className="text-[11px] font-bold text-error-600">• فاتح النزاع</span>
+                    )}
+                  </div>
+                  <p className="font-bold text-slate-800 flex items-center gap-1.5 text-sm">
+                    <User size={15} className="text-slate-400" />
+                    {client?.full_name || 'غير متوفر'}
+                  </p>
+                  <p className="text-xs text-slate-600 flex items-center gap-1.5" dir="ltr">
+                    <Mail size={14} className="text-slate-400 shrink-0" />
+                    <span className="truncate">{client?.email || 'لا يوجد بريد'}</span>
+                  </p>
+                  <p className="text-xs text-slate-600 flex items-center gap-1.5" dir="ltr">
+                    <Phone size={14} className="text-slate-400 shrink-0" />
+                    <span>{client?.phone || 'لا يوجد رقم هاتف'}</span>
+                  </p>
+                  <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                    <MapPin size={14} className="text-slate-400 shrink-0" />
+                    <span>{client?.city || 'المدينة غير محددة'}</span>
+                  </p>
+                </div>
+
+                {/* مقدم الخدمة */}
+                <div className={`rounded-2xl border p-4 space-y-2 ${info.isOpenedByProvider ? 'border-purple-300 bg-purple-50/40' : 'border-slate-200 bg-white'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-purple-700 bg-purple-100 px-2.5 py-0.5 rounded-full">بيانات مقدم الخدمة</span>
+                    {info.isOpenedByProvider && (
+                      <span className="text-[11px] font-bold text-error-600">• فاتح النزاع</span>
+                    )}
+                  </div>
+                  <p className="font-bold text-slate-800 flex items-center gap-1.5 text-sm">
+                    <User size={15} className="text-slate-400" />
+                    {provider?.full_name || 'غير متوفر'}
+                  </p>
+                  <p className="text-xs text-slate-600 flex items-center gap-1.5" dir="ltr">
+                    <Mail size={14} className="text-slate-400 shrink-0" />
+                    <span className="truncate">{provider?.email || 'لا يوجد بريد'}</span>
+                  </p>
+                  <p className="text-xs text-slate-600 flex items-center gap-1.5" dir="ltr">
+                    <Phone size={14} className="text-slate-400 shrink-0" />
+                    <span>{provider?.phone || 'لا يوجد رقم هاتف'}</span>
+                  </p>
+                  <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                    <MapPin size={14} className="text-slate-400 shrink-0" />
+                    <span>{provider?.city || 'المدينة غير محددة'}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* الخط الزمني للتواريخ */}
+              <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
+                <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                  <Clock size={16} className="text-primary-600" />
+                  الخط الزمني للخدمة والطلب والنزاع
+                </h4>
+
+                <div className="space-y-2.5 text-xs border-r-2 border-primary-200 pr-3 mr-1">
+                  <div>
+                    <p className="font-bold text-slate-700">1. تاريخ نشر الخدمة في المنصة</p>
+                    <p className="text-slate-500">{formatDateTime(listing?.created_at)}</p>
+                  </div>
+
+                  <div>
+                    <p className="font-bold text-slate-700">2. تاريخ طلب العميل للخدمة</p>
+                    <p className="text-slate-500">{formatDateTime(selectedDispute.order?.created_at)}</p>
+                  </div>
+
+                  <div>
+                    <p className="font-bold text-slate-700">3. تاريخ قبول مقدم الخدمة للطلب</p>
+                    <p className="text-slate-500">
+                      {info.acceptedAt ? formatDateTime(info.acceptedAt) : 'لم يُسجل قبول (حدث النزاع قبل القبول أو لم يُحفظ في السجل)'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="font-bold text-slate-700">4. تاريخ تسليم الخدمة</p>
+                    <p className="text-slate-500">
+                      {info.deliveredAt ? formatDateTime(info.deliveredAt) : 'لم يتم التسليم بعد (حدث النزاع قبل مرحلة التسليم)'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="font-bold text-error-600">5. تاريخ رفع النزاع ({info.openerRole})</p>
+                    <p className="text-slate-600 font-medium">{formatDateTime(selectedDispute.created_at)}</p>
+                  </div>
+                </div>
+              </div>
+
+              {selectedDispute.admin_resolution && (
+                <div className="rounded-2xl bg-success-50 border border-success-100 p-4">
+                  <p className="text-xs font-bold text-success-700 mb-1">قرار الإدارة المتخذ:</p>
+                  <p className="text-sm text-slate-700">{selectedDispute.admin_resolution}</p>
+                </div>
+              )}
+
+              {/* أزرار الإجراء */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setSelectedDispute(null)}
+                  className="btn-ghost flex-1 !bg-slate-100"
+                >
+                  إغلاق
+                </button>
+                {selectedDispute.status === 'open' && (
+                  <button
+                    onClick={() => setResolveModal(selectedDispute.id)}
+                    className="btn-primary flex-1"
+                  >
+                    <Scale size={16} />
+                    اتخاذ قرار في النزاع
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Resolve modal */}
       {resolveModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setResolveModal(null)}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setResolveModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-black text-slate-800 mb-4">حل النزاع</h3>
             <div className="space-y-4">
@@ -1384,7 +1705,7 @@ function DisputesSection() {
                   <option value="">اختر القرار...</option>
                   <option value="resolved_customer">لصالح العميل (إلغاء/استرداد)</option>
                   <option value="resolved_provider">لصالح مقدم الخدمة (إكتمال)</option>
-                  <option value="resolved_partial">حل جزري</option>
+                  <option value="resolved_partial">حل جزئي</option>
                 </select>
               </div>
               <div>
