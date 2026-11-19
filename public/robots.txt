@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+Allow: /services
+Allow: /auth/signin
+Allow: /auth/signup
+
+Disallow: /admin
+Disallow: /messages
+Disallow: /wallet
+Disallow: /orders
+Disallow: /profile
+Disallow: /notifications
+
+Sitemap: https://mahara-platform1.vercel.app/sitemap.xml
