@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Mail, Lock, User as UserIcon, Eye, EyeOff, Briefcase, ShoppingBag, ArrowLeft, AlertCircle, KeyRound, Users } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import Logo from '@/components/Logo';
 
 export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot' }) {
@@ -17,7 +18,41 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
+
+  const handleGoogleAuth = async () => {
+    setError(null);
+
+    // في حالة إنشاء حساب جديد، نطلب اختيار نوع الحساب أولاً
+    if (mode === 'signup' && !accountType) {
+      setError('الرجاء اختيار نوع الحساب أولاً قبل المتابعة باستخدام Google');
+      return;
+    }
+
+    setGoogleLoading(true);
+
+    // حفظ نوع الحساب المختار مؤقتاً لاستخدامه بعد العودة من جوجل
+    if (accountType) {
+      localStorage.setItem('pending_account_type', accountType);
+    }
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'select_account',
+        },
+      },
+    });
+
+    if (error) {
+      setError('حدث خطأ أثناء الاتصال بحساب Google، يرجى المحاولة مرة أخرى');
+      setGoogleLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -238,9 +273,55 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
                 </div>
               )}
 
-              <button type="submit" disabled={loading} className="btn-primary w-full !h-14">
+              <button type="submit" disabled={loading || googleLoading} className="btn-primary w-full !h-14">
                 {loading ? 'جاري...' : titles[mode].title}
               </button>
+
+              {mode !== 'forgot' && (
+                <>
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-slate-200" />
+                    </div>
+                    <div className="relative flex justify-center text-xs">
+                      <span className="bg-white px-3 font-bold text-slate-400">أو</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleGoogleAuth}
+                    disabled={loading || googleLoading}
+                    className="w-full h-14 flex items-center justify-center gap-3 rounded-xl border-2 border-slate-200 bg-white px-4 font-bold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all disabled:opacity-60"
+                  >
+                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                      <path
+                        fill="#4285F4"
+                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                      />
+                    </svg>
+                    <span>
+                      {googleLoading
+                        ? 'جاري التحويل إلى Google...'
+                        : mode === 'signin'
+                        ? 'المتابعة باستخدام Google'
+                        : 'التسجيل باستخدام Google'}
+                    </span>
+                  </button>
+                </>
+              )}
             </form>
           )}
 

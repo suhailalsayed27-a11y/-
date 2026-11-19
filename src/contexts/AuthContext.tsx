@@ -44,6 +44,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadProfile(user: User) {
+    const pendingType = localStorage.getItem('pending_account_type');
+
     const { data } = await supabase
       .from('profiles')
       .select('*')
@@ -51,23 +53,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .maybeSingle();
 
     if (data) {
-      setProfile(data as Profile);
+      // في حال أنشأ Trigger في قاعدة البيانات الملف بنوع افتراضي 'client' وكان المستخدم قد اختار نوعاً آخر في صفحة التسجيل عبر جوجل
+      if (pendingType && data.account_type !== pendingType) {
+        const { data: updated } = await supabase
+          .from('profiles')
+          .update({ account_type: pendingType })
+          .eq('auth_user_id', user.id)
+          .select('*')
+          .maybeSingle();
+        localStorage.removeItem('pending_account_type');
+        setProfile((updated as Profile) || (data as Profile));
+      } else {
+        localStorage.removeItem('pending_account_type');
+        setProfile(data as Profile);
+      }
       setLoading(false);
       return;
     }
 
-    // في حال تأخر إنشاء الملف الشخصي لحظة التسجيل، ننشئه مباشرة عبر auth_user_id
+    // إنشاء الملف الشخصي لأول مرة مع دعم بيانات Google ونوع الحساب المختار
+    const resolvedAccountType = pendingType || user.user_metadata?.account_type || 'client';
+    const resolvedName =
+      user.user_metadata?.full_name ||
+      user.user_metadata?.name ||
+      user.email?.split('@')[0] ||
+      'مستخدم جديد';
+
     const { data: created } = await supabase
       .from('profiles')
       .insert({
         auth_user_id: user.id,
-        full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'مستخدم جديد',
+        full_name: resolvedName,
         email: user.email,
-        account_type: user.user_metadata?.account_type || 'client',
+        account_type: resolvedAccountType,
+        ...(user.user_metadata?.avatar_url ? { avatar_url: user.user_metadata.avatar_url } : {}),
       })
       .select('*')
       .maybeSingle();
 
+    localStorage.removeItem('pending_account_type');
     setProfile((created as Profile) || null);
     setLoading(false);
   }
