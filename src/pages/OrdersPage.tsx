@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Inbox, Clock, CheckCircle, XCircle, Loader2, AlertTriangle,
   Timer, MessageSquare, Shield, X, Play, ShieldAlert,
-  type LucideIcon, LayoutList
+  type LucideIcon, LayoutList, ImagePlus
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -47,6 +47,8 @@ export default function OrdersPage() {
   const [showCompleteModal, setShowCompleteModal] = useState<string | null>(null);
   const [disputeReason, setDisputeReason] = useState('');
   const [disputeDetails, setDisputeDetails] = useState('');
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidencePreview, setEvidencePreview] = useState<string | null>(null);
   const [completeNote, setCompleteNote] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -137,6 +139,28 @@ export default function OrdersPage() {
     loadOrders();
   };
 
+  const handleEvidenceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setActionError('حجم الصورة يجب ألا يتجاوز 5 ميجابايت');
+      return;
+    }
+    setActionError(null);
+    setEvidenceFile(file);
+    setEvidencePreview(URL.createObjectURL(file));
+  };
+
+  const closeDisputeModal = () => {
+    if (actionLoading) return;
+    setShowDisputeModal(null);
+    setDisputeReason('');
+    setDisputeDetails('');
+    setEvidenceFile(null);
+    setEvidencePreview(null);
+    setActionError(null);
+  };
+
   const handleDispute = async () => {
     if (!showDisputeModal) return;
     if (!disputeReason.trim() || !disputeDetails.trim()) {
@@ -144,18 +168,58 @@ export default function OrdersPage() {
       return;
     }
 
-    setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('dispute_order', {
-      p_order_id: showDisputeModal,
-      p_reason: disputeReason.trim(),
-      p_details: disputeDetails.trim(),
-    });
-    setActionLoading(false);
-    if (error) { setActionError(error.message); return; }
-    setShowDisputeModal(null);
-    setDisputeReason('');
-    setDisputeDetails('');
-    loadOrders();
+    const orderId = showDisputeModal;
+    setActionLoading(true);
+    setActionError(null);
+
+    try {
+      let evidenceUrl: string | null = null;
+
+      if (evidenceFile) {
+        const fileExt = evidenceFile.name.split('.').pop();
+        const filePath = `${orderId}/${Date.now()}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('dispute-evidence')
+          .upload(filePath, evidenceFile);
+
+        if (uploadError) {
+          throw new Error('فشل رفع الصورة: ' + uploadError.message);
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('dispute-evidence')
+          .getPublicUrl(filePath);
+
+        evidenceUrl = urlData.publicUrl;
+      }
+
+      const { error } = await supabase.rpc('dispute_order', {
+        p_order_id: orderId,
+        p_reason: disputeReason.trim(),
+        p_details: disputeDetails.trim(),
+        p_evidence_url: evidenceUrl,
+      });
+
+      if (error) throw error;
+
+      // ضمان تطابق رقم النزاع مع رقم الطلب وحفظ رابط الصورة
+      await supabase
+        .from('disputes')
+        .update({ id: orderId, evidence_url: evidenceUrl })
+        .eq('order_id', orderId);
+
+      setShowDisputeModal(null);
+      setDisputeReason('');
+      setDisputeDetails('');
+      setEvidenceFile(null);
+      setEvidencePreview(null);
+      loadOrders();
+    } catch (err: any) {
+      setActionError(err.message || 'حدث خطأ أثناء فتح النزاع');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleCancel = async (orderId: string) => {
@@ -397,6 +461,8 @@ export default function OrdersPage() {
                             setActionError(null);
                             setDisputeReason('');
                             setDisputeDetails('');
+                            setEvidenceFile(null);
+                            setEvidencePreview(null);
                             setShowDisputeModal(order.id);
                           }}
                           disabled={actionLoading}
@@ -435,15 +501,17 @@ export default function OrdersPage() {
 
       {/* نافذة فتح النزاع (Dispute Modal) */}
       {showDisputeModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setShowDisputeModal(null)}>
-          <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={closeDisputeModal}>
+          <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100 shrink-0">
                 <AlertTriangle size={20} className="text-error-600" />
               </div>
               <div>
                 <h3 className="text-lg font-black text-slate-800">فتح نزاع ورفع شكوى</h3>
-                <p className="text-xs text-slate-500">سيتم مراجعة النزاع من الإدارة وإيقاف تحويل الرصيد</p>
+                <p className="text-xs text-slate-500">
+                  رقم الطلب والنزاع: <span className="font-mono font-bold text-slate-700">#{showDisputeModal.slice(0, 8)}</span>
+                </p>
               </div>
             </div>
 
@@ -473,11 +541,46 @@ export default function OrdersPage() {
                 />
               </div>
 
+              {/* إرفاق صورة للنزاع */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                  إرفاق صورة توضيحية / دليل (اختياري - بحد أقصى 5MB)
+                </label>
+                {!evidencePreview ? (
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 text-center hover:border-primary-400 hover:bg-primary-50/30 transition-colors">
+                    <ImagePlus size={22} className="text-slate-400 mb-1" />
+                    <span className="text-xs font-bold text-slate-600">اضغط لاختيار صورة من جهازك</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleEvidenceChange}
+                      className="hidden"
+                    />
+                  </label>
+                ) : (
+                  <div className="relative rounded-2xl border border-slate-200 p-2 bg-slate-50">
+                    <img
+                      src={evidencePreview}
+                      alt="معاينة الصورة"
+                      className="max-h-40 w-full rounded-xl object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { setEvidenceFile(null); setEvidencePreview(null); }}
+                      className="absolute top-3 left-3 flex h-7 w-7 items-center justify-center rounded-full bg-error-600 text-white shadow"
+                      title="إزالة الصورة"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {actionError && <p className="text-sm text-error-600 bg-error-50 rounded-xl p-3">{actionError}</p>}
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => setShowDisputeModal(null)}
+                  onClick={closeDisputeModal}
                   disabled={actionLoading}
                   className="btn-ghost flex-1 !bg-slate-100"
                 >

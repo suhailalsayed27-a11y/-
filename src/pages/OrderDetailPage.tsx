@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Clock, CheckCircle2, ShieldAlert, AlertTriangle, Loader2,
   ArrowRight, MessageSquare, Shield, Check, User,
-  Banknote, Calendar, AlertCircle, XCircle
+  Banknote, Calendar, AlertCircle, XCircle, ImagePlus, X
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -33,8 +33,10 @@ export default function OrderDetailPage() {
   const [showDeliverModal, setShowDeliverModal] = useState(false);
   const [showClientConfirmModal, setShowClientConfirmModal] = useState(false); 
   
-  const [disputeReason, setDisputeReason] = useState('');
+  const [disputeReason, setDisputeReason] = useState('لم يتم استلام الخدمة');
   const [disputeDetails, setDisputeDetails] = useState('');
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidencePreview, setEvidencePreview] = useState<string | null>(null);
   const [deliverNote, setDeliverNote] = useState('');
 
   const fetchOrderData = useCallback(async () => {
@@ -148,21 +150,76 @@ export default function OrderDetailPage() {
     if (error) setActionError(error.message);
   };
 
-  // فتح نزاع (لا، لم يتم استلام الخدمة)
-  const handleOpenDispute = async () => {
-    if (!disputeReason.trim() || !disputeDetails.trim()) {
-      setActionError('يرجى كتابة سبب وتفاصيل النزاع كاملة');
+  // اختيار صورة الدليل للنزاع
+  const handleEvidenceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setActionError('حجم الصورة يجب ألا يتجاوز 5 ميجابايت');
       return;
     }
-    setActionLoading(true); setActionError(null);
-    const { error } = await supabase.rpc('dispute_order', {
-      p_order_id: order.id,
-      p_reason: disputeReason,
-      p_details: disputeDetails,
-    });
-    setActionLoading(false);
-    setShowDisputeModal(false);
-    if (error) setActionError(error.message);
+    setEvidenceFile(file);
+    setEvidencePreview(URL.createObjectURL(file));
+  };
+
+  // فتح نزاع بنفس رقم الطلب مع إمكانية إرفاق صورة
+  const handleOpenDispute = async () => {
+    const finalReason = disputeReason.trim() || 'لم يتم استلام الخدمة';
+    if (!disputeDetails.trim()) {
+      setActionError('يرجى كتابة تفاصيل النزاع والمشكلة');
+      return;
+    }
+
+    setActionLoading(true);
+    setActionError(null);
+
+    try {
+      let evidenceUrl: string | null = null;
+
+      if (evidenceFile) {
+        const fileExt = evidenceFile.name.split('.').pop();
+        const filePath = `${order.id}/${Date.now()}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('dispute-evidence')
+          .upload(filePath, evidenceFile);
+
+        if (uploadError) {
+          throw new Error('فشل رفع الصورة: ' + uploadError.message);
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('dispute-evidence')
+          .getPublicUrl(filePath);
+
+        evidenceUrl = urlData.publicUrl;
+      }
+
+      const { error } = await supabase.rpc('dispute_order', {
+        p_order_id: order.id,
+        p_reason: finalReason,
+        p_details: disputeDetails.trim(),
+        p_evidence_url: evidenceUrl,
+      });
+
+      if (error) throw error;
+
+      // ضمان تطابق رقم النزاع مع رقم الطلب وحفظ رابط الصورة
+      await supabase
+        .from('disputes')
+        .update({ id: order.id, evidence_url: evidenceUrl })
+        .eq('order_id', order.id);
+
+      setShowDisputeModal(false);
+      setDisputeDetails('');
+      setEvidenceFile(null);
+      setEvidencePreview(null);
+      await fetchOrderData();
+    } catch (err: any) {
+      setActionError(err.message || 'حدث خطأ أثناء فتح النزاع');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleCancelOrder = async () => {
@@ -174,6 +231,7 @@ export default function OrderDetailPage() {
   };
 
   const otherParty = isClient ? order.provider : order.client;
+  const activeDispute = Array.isArray(order.dispute) ? order.dispute[0] : (order.dispute as any);
 
   return (
     <div className="pb-24 pt-6 max-w-4xl mx-auto px-4">
@@ -264,20 +322,43 @@ export default function OrderDetailPage() {
             </div>
           </div>
         ) : (
-          <div className={`mt-6 p-4 rounded-2xl flex items-center gap-3 ${
-            order.status === 'cancelled' ? 'bg-error-50 text-error-700' : 'bg-orange-50 text-orange-700'
+          <div className={`mt-6 p-4 rounded-2xl space-y-3 ${
+            order.status === 'cancelled' ? 'bg-error-50 text-error-700' : 'bg-orange-50 text-orange-800 border border-orange-200'
           }`}>
-            <AlertCircle className="shrink-0" size={24} />
-            <div>
-              <h4 className="font-bold text-sm">
-                {order.status === 'cancelled' ? 'الطلب ملغي' : 'الطلب قيد مراجعة النزاع'}
-              </h4>
-              <p className="text-xs opacity-90">
-                {order.status === 'cancelled'
-                  ? 'تم إلغاء هذا الطلب وإعادة الأموال المحجوزة.'
-                  : 'تم إيقاف تحويل الأموال وتجري الآن مراجعة المشكلة من الإدارة.'}
-              </p>
+            <div className="flex items-center gap-3">
+              <AlertCircle className="shrink-0" size={24} />
+              <div>
+                <h4 className="font-bold text-sm">
+                  {order.status === 'cancelled'
+                    ? 'الطلب ملغي'
+                    : `الطلب قيد مراجعة النزاع (رقم النزاع: #${order.id.slice(0, 8)})`}
+                </h4>
+                <p className="text-xs opacity-90">
+                  {order.status === 'cancelled'
+                    ? 'تم إلغاء هذا الطلب وإعادة الأموال المحجوزة.'
+                    : 'تم إيقاف تحويل الأموال وتجري الآن مراجعة المشكلة من الإدارة.'}
+                </p>
+              </div>
             </div>
+
+            {order.status === 'disputed' && activeDispute && (
+              <div className="rounded-xl bg-white/80 p-3 text-xs space-y-1.5 border border-orange-200/70">
+                <p><strong className="text-slate-700">السبب:</strong> {activeDispute.reason}</p>
+                {activeDispute.details && <p><strong className="text-slate-700">التفاصيل:</strong> {activeDispute.details}</p>}
+                {activeDispute.evidence_url && (
+                  <div className="pt-1">
+                    <p className="font-bold text-slate-700 mb-1">الصورة المرفقة:</p>
+                    <a href={activeDispute.evidence_url} target="_blank" rel="noopener noreferrer">
+                      <img
+                        src={activeDispute.evidence_url}
+                        alt="دليل النزاع"
+                        className="max-h-48 rounded-lg border border-slate-200 object-contain"
+                      />
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -304,15 +385,40 @@ export default function OrderDetailPage() {
               )}
 
               {isProvider && order.status === 'in_progress' && (
-                <button onClick={() => setShowDeliverModal(true)} disabled={actionLoading} className="btn-primary !bg-success-600">
-                  <CheckCircle2 size={16} /> تم تسليم العمل
-                </button>
+                <>
+                  <button onClick={() => setShowDeliverModal(true)} disabled={actionLoading} className="btn-primary !bg-success-600">
+                    <CheckCircle2 size={16} /> تم تسليم العمل
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDisputeReason('مشكلة أثناء تنفيذ الطلب');
+                      setShowDisputeModal(true);
+                    }}
+                    disabled={actionLoading}
+                    className="btn-ghost !bg-error-50 !text-error-600"
+                  >
+                    <ShieldAlert size={16} /> فتح نزاع
+                  </button>
+                </>
               )}
 
               {/* أزرار العميل فقط */}
               {isClient && (order.status === 'awaiting_customer_confirmation' || order.status === 'provider_completed') && (
                 <button onClick={() => setShowClientConfirmModal(true)} disabled={actionLoading} className="btn-primary !bg-success-600 w-full sm:w-auto">
                   <CheckCircle2 size={16} /> تأكيد إنجاز العمل
+                </button>
+              )}
+
+              {isClient && order.status === 'in_progress' && (
+                <button
+                  onClick={() => {
+                    setDisputeReason('تأخر أو مشكلة في تنفيذ الخدمة');
+                    setShowDisputeModal(true);
+                  }}
+                  disabled={actionLoading}
+                  className="btn-ghost !bg-error-50 !text-error-600"
+                >
+                  <ShieldAlert size={16} /> فتح نزاع
                 </button>
               )}
 
@@ -398,7 +504,8 @@ export default function OrderDetailPage() {
               <button
                 onClick={() => {
                   setShowClientConfirmModal(false);
-                  setShowDisputeModal(true); // يفتح نافذة النزاع مباشرة
+                  setDisputeReason('لم يتم استلام الخدمة');
+                  setShowDisputeModal(true);
                 }}
                 disabled={actionLoading}
                 className="btn-ghost w-full !bg-error-50 !text-error-700 !h-12 !text-base"
@@ -429,32 +536,78 @@ export default function OrderDetailPage() {
       {/* 3. Modal: Open Dispute */}
       {showDisputeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !actionLoading && setShowDisputeModal(false)}>
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl animate-scale-up" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100 text-error-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error-100 text-error-600 shrink-0">
                 <ShieldAlert size={20} />
               </div>
               <div>
                 <h3 className="text-lg font-black text-slate-800">فتح نزاع حول الطلب</h3>
-                <p className="text-xs text-slate-500">سيتم إيقاف تحويل المبلغ لمقدم الخدمة حتى تتم مراجعة النزاع وحله.</p>
+                <p className="text-xs text-slate-500">رقم الطلب والنزاع: <span className="font-mono font-bold">#{order.id.slice(0, 8)}</span></p>
               </div>
             </div>
 
             <div className="space-y-3 mb-4">
               <div>
-                <label className="text-xs font-bold text-slate-700 mb-1 block">سبب النزاع والمشكلة</label>
+                <label className="text-xs font-bold text-slate-700 mb-1 block">عنوان / سبب النزاع *</label>
+                <input
+                  type="text"
+                  value={disputeReason}
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  placeholder="مثال: لم يتم استلام الخدمة"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-xs focus:ring-2 focus:ring-primary-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 mb-1 block">تفاصيل المشكلة *</label>
                 <textarea
                   value={disputeDetails}
                   onChange={(e) => setDisputeDetails(e.target.value)}
                   placeholder="اشرح المشكلة بالتفصيل (مثال: الخدمة لم تكتمل أو غير مطابقة)..."
-                  className="w-full rounded-2xl border border-slate-200 p-3 text-xs focus:ring-2 focus:ring-primary-500 outline-none h-32"
+                  className="w-full rounded-2xl border border-slate-200 p-3 text-xs focus:ring-2 focus:ring-primary-500 outline-none h-28 resize-none"
                 />
+              </div>
+
+              {/* إرفاق صورة للنزاع */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 mb-1 block">
+                  إرفاق صورة توضيحية / دليل (اختياري - بحد أقصى 5MB)
+                </label>
+                {!evidencePreview ? (
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-4 text-center hover:border-primary-400 hover:bg-primary-50/30 transition-colors">
+                    <ImagePlus size={22} className="text-slate-400 mb-1" />
+                    <span className="text-xs font-bold text-slate-600">اضغط لاختيار صورة من جهازك</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleEvidenceChange}
+                      className="hidden"
+                    />
+                  </label>
+                ) : (
+                  <div className="relative rounded-2xl border border-slate-200 p-2 bg-slate-50">
+                    <img
+                      src={evidencePreview}
+                      alt="معاينة الصورة"
+                      className="max-h-40 w-full rounded-xl object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { setEvidenceFile(null); setEvidencePreview(null); }}
+                      className="absolute top-3 left-3 flex h-7 w-7 items-center justify-center rounded-full bg-error-600 text-white shadow"
+                      title="إزالة الصورة"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="flex gap-2">
               <button onClick={() => setShowDisputeModal(false)} disabled={actionLoading} className="btn-ghost flex-1 !bg-slate-100">تراجع</button>
-              <button onClick={() => { setDisputeReason('لم يتم استلام الخدمة'); handleOpenDispute(); }} disabled={actionLoading} className="btn-primary flex-1 !bg-error-600">
+              <button onClick={handleOpenDispute} disabled={actionLoading || !disputeDetails.trim()} className="btn-primary flex-1 !bg-error-600 disabled:opacity-50">
                 {actionLoading ? <Loader2 size={16} className="animate-spin" /> : 'تأكيد فتح النزاع'}
               </button>
             </div>
