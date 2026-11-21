@@ -4,6 +4,7 @@ import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import BottomNav from '@/components/BottomNav';
 import Onboarding from '@/components/Onboarding';
+import { PushPermissionBanner } from '@/components/PushPermissionBanner';
 import HomePage from '@/pages/HomePage';
 import ServicesPage from '@/pages/ServicesPage';
 import ListingDetailPage from '@/pages/ListingDetailPage';
@@ -119,6 +120,7 @@ export default function App() {
       </main>
       {showChrome && <Footer />}
       {showChrome && isAuthenticated && <BottomNav />}
+      <PushPermissionBanner />
     </div>
   );
 }
