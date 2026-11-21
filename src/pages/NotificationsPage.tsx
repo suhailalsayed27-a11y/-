@@ -94,7 +94,7 @@ export default function NotificationsPage() {
         setPushFeedback('تم تفعيل إشعارات الجهاز بنجاح! ستصلك التنبيهات حتى خارج الموقع.');
       } else {
         setPushStatus(Notification.permission);
-        setPushFeedback('تعذر التفعيل، تأكد من السماح بالإشعارات في المتصفح.');
+        setPushFeedback(res?.error || 'تعذر التفعيل، تأكد من السماح بالإشعارات في المتصفح.');
       }
     } finally {
       setEnablingPush(false);
