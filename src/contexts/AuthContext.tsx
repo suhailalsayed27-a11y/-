@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { subscribeToPushNotifications } from '@/lib/pushNotifications';
 import type { Profile } from '@/types';
 
 interface AuthContextValue {
@@ -44,6 +45,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadProfile(user: User) {
+    // تفعيل وتسجيل جهاز المستخدم لاستقبال الإشعارات الفورية خارج الموقع
+    subscribeToPushNotifications(user.id).catch(console.error);
+
     const pendingType = localStorage.getItem('pending_account_type');
 
     const { data } = await supabase
