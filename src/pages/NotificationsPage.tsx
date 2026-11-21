@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Bell, CheckCheck, Trash2, MessageCircle, ShoppingCart, Megaphone, Info, ArrowRight } from 'lucide-react';
+import { Bell, BellRing, CheckCheck, Trash2, MessageCircle, ShoppingCart, Megaphone, Info, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotifications } from '@/hooks/useNotifications';
+import { subscribeToPushNotifications } from '@/lib/pushNotifications';
 import type { Notification, NotificationType } from '@/types';
 
 const TYPE_ICON: Record<NotificationType, typeof Bell> = {
@@ -40,13 +41,65 @@ export default function NotificationsPage() {
   const navigate = useNavigate();
   const { notifications, unreadCount, loading: loadingNotifs, markAsRead, markAllAsRead, deleteNotification } = useNotifications();
 
+  const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
+  const [enablingPush, setEnablingPush] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<string | null>(null);
+
   useEffect(() => {
     if (!loading && !session) {
       navigate('/auth/signin', { state: { from: '/notifications' } });
     }
   }, [session, loading, navigate]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setPushStatus('unsupported');
+      return;
+    }
+    setPushStatus(Notification.permission);
+  }, []);
+
   if (!session || !profile) return null;
+
+  async function handleEnableDevicePush() {
+    if (!session?.user) return;
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true;
+
+    if (isIOS && !isStandalone) {
+      setPushFeedback('في الآيفون: اضغط زر المشاركة في المتصفح ثم اختر "إضافة إلى الشاشة الرئيسية" لتفعيل الإشعارات.');
+      return;
+    }
+
+    if (!('Notification' in window)) {
+      setPushFeedback('هذا المتصفح لا يدعم إشعارات الجهاز.');
+      return;
+    }
+
+    if (Notification.permission === 'denied') {
+      setPushStatus('denied');
+      setPushFeedback('الإشعارات محظورة من إعدادات المتصفح. افتح إعدادات الموقع بجانب رابط الصفحة وفعّل الإشعارات.');
+      return;
+    }
+
+    setEnablingPush(true);
+    setPushFeedback(null);
+    try {
+      const res = await subscribeToPushNotifications(session.user.id);
+      if (res?.granted && !res?.error) {
+        setPushStatus('granted');
+        setPushFeedback('تم تفعيل إشعارات الجهاز بنجاح! ستصلك التنبيهات حتى خارج الموقع.');
+      } else {
+        setPushStatus(Notification.permission);
+        setPushFeedback('تعذر التفعيل، تأكد من السماح بالإشعارات في المتصفح.');
+      }
+    } finally {
+      setEnablingPush(false);
+    }
+  }
 
   const handleClick = (notif: Notification) => {
     if (!notif.is_read) markAsRead(notif.id);
@@ -56,7 +109,7 @@ export default function NotificationsPage() {
   return (
     <div className="pb-20 md:pb-8">
       <div className="mx-auto max-w-2xl px-4 py-6">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-100">
               <Bell size={22} className="text-primary-600" />
@@ -76,6 +129,47 @@ export default function NotificationsPage() {
               <CheckCheck size={16} />
               تعليم الكل كمقروء
             </button>
+          )}
+        </div>
+
+        {/* بطاقة تفعيل إشعارات الجهاز */}
+        <div className="card mb-6 p-4 border border-primary-100 bg-primary-50/40">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-100 text-primary-600">
+                <BellRing size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  {pushStatus === 'granted' ? 'إشعارات الجهاز مفعّلة' : 'إشعارات الجهاز الفورية'}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {pushStatus === 'granted'
+                    ? 'تصلك تنبيهات الطلبات والرسائل تلقائياً حتى خارج الموقع'
+                    : 'فعّلها لتصلك إشعارات الطلبات والرسائل على هاتفك فوراً'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleEnableDevicePush}
+              disabled={enablingPush}
+              className={`rounded-xl px-4 py-2 text-xs font-bold transition-colors ${
+                pushStatus === 'granted'
+                  ? 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                  : 'bg-primary-600 text-white hover:bg-primary-700'
+              } disabled:opacity-50`}
+            >
+              {enablingPush
+                ? 'جاري التفعيل...'
+                : pushStatus === 'granted'
+                ? 'تحديث ربط الجهاز'
+                : 'تفعيل إشعارات الجهاز'}
+            </button>
+          </div>
+          {pushFeedback && (
+            <p className="mt-3 rounded-lg bg-white p-2.5 text-xs font-medium text-slate-700 border border-slate-200">
+              {pushFeedback}
+            </p>
           )}
         </div>
 
