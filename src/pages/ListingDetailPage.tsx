@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight, CheckCircle, X, Loader2, Wallet as WalletIcon, AlertCircle, Clock } from 'lucide-react';
+import {
+  MapPin, Briefcase, MessageCircle, ShoppingCart, ArrowRight,
+  CheckCircle, ShieldCheck, X, Loader2, Wallet as WalletIcon, AlertCircle, Clock
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { getCategoryColor } from '@/types';
@@ -9,6 +12,13 @@ import type { Listing, Review, ListingImage } from '@/types';
 import StarRating from '@/components/StarRating';
 
 type DetailedListing = Listing & { rejection_reason?: string | null };
+
+const SHIFT_LABELS: Record<string, string> = {
+  morning: 'فترة صباحية',
+  evening: 'فترة مسائية',
+  full_day: 'دوام كامل',
+  urgent: 'طوارئ / فوري',
+};
 
 export default function ListingDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -75,7 +85,6 @@ export default function ListingDetailPage() {
     }
     if (!listing || profile.id === listing.provider_id) return;
 
-    // التحقق من وجود محادثة سابقة بين الطرفين في كلا الاتجاهين
     const { data: existing } = await supabase
       .from('conversations')
       .select('id')
@@ -88,7 +97,6 @@ export default function ListingDetailPage() {
       return;
     }
 
-    // إنشاء محادثة جديدة
     const { data: newConv } = await supabase
       .from('conversations')
       .insert({
@@ -159,7 +167,6 @@ export default function ListingDetailPage() {
   const isAdmin = Boolean(profile?.is_admin);
   const isPubliclyVisible = listing?.status === 'published';
 
-  // إخفاء الخدمة عن الزوار والعملاء إذا لم تكن منشورة بعد
   if (!listing || (!isPubliclyVisible && !isOwner && !isAdmin)) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center px-4">
@@ -171,8 +178,14 @@ export default function ListingDetailPage() {
   }
 
   const color = getCategoryColor(listing.category?.name || '');
+  const providerExtra = listing.provider as any;
   const providerAvatar = listing.provider?.avatar_url;
   const providerName = listing.provider?.full_name || 'مقدم خدمة';
+  const isProviderVerified = Boolean(providerExtra?.is_verified || listing.provider?.provider_verified);
+  const isProviderAvailable = providerExtra?.is_available_now !== false;
+  const providerDistrict = providerExtra?.district;
+  const providerShifts: string[] = Array.isArray(providerExtra?.available_shifts) ? providerExtra.available_shifts : [];
+  const providerExpYears = providerExtra?.experience_years;
   const galleryImages = images.length > 0 ? images : [];
 
   return (
@@ -260,15 +273,56 @@ export default function ListingDetailPage() {
                 </div>
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm text-slate-500">مقدم الخدمة: <span className="font-bold text-slate-700">{providerName}</span></p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm text-slate-500">
+                    مقدم الخدمة: <span className="font-bold text-slate-800">{providerName}</span>
+                  </p>
+                  {isProviderVerified && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+                      <ShieldCheck size={13} />
+                      موثق
+                    </span>
+                  )}
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                      isProviderAvailable
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        isProviderAvailable ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                      }`}
+                    />
+                    {isProviderAvailable ? 'متاح الآن' : 'غير متاح حالياً'}
+                  </span>
+                </div>
+
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   <span className={`badge ${color.bg} ${color.text}`}>{listing.category?.name}</span>
                   <span className="flex items-center gap-1 text-sm text-slate-500">
                     <MapPin size={14} className="text-primary-500" />
-                    {listing.city}
+                    {listing.city}{providerDistrict ? ` - ${providerDistrict}` : ''}
                   </span>
                   <StarRating rating={listing.rating} size={14} showNumber count={listing.rating_count} />
                 </div>
+
+                {providerShifts.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs text-slate-400 flex items-center gap-1">
+                      <Clock size={12} /> أوقات العمل:
+                    </span>
+                    {providerShifts.map((shift) => (
+                      <span
+                        key={shift}
+                        className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600"
+                      >
+                        {SHIFT_LABELS[shift] || shift}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -283,7 +337,9 @@ export default function ListingDetailPage() {
               </div>
               <div className="flex items-center gap-2 text-sm text-slate-500">
                 <Briefcase size={16} className="text-slate-400" />
-                <span>{listing.experience || 'غير محدد'}</span>
+                <span>
+                  {listing.experience || (providerExpYears ? `${providerExpYears} سنوات خبرة` : 'غير محدد')}
+                </span>
               </div>
             </div>
 

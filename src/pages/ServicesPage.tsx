@@ -1,13 +1,24 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal, X, Inbox } from 'lucide-react';
+import {
+  Search, SlidersHorizontal, X, Inbox, ShieldCheck, Sparkles, Clock
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 import { useStaticData } from '@/hooks/useStaticData';
 import type { Listing } from '@/types';
 import ListingCard from '@/components/ListingCard';
 
+const SHIFT_OPTIONS = [
+  { id: 'morning', label: 'فترة صباحية' },
+  { id: 'evening', label: 'فترة مسائية' },
+  { id: 'full_day', label: 'دوام كامل' },
+  { id: 'urgent', label: 'طوارئ / فوري' },
+];
+
 export default function ServicesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { profile } = useAuth();
   const { categories, cities, loading } = useStaticData();
   const [listings, setListings] = useState<Listing[]>([]);
   const [loadingListings, setLoadingListings] = useState(true);
@@ -20,7 +31,12 @@ export default function ServicesPage() {
   const [maxPrice, setMaxPrice] = useState(searchParams.get('maxPrice') || '');
   const [minRating, setMinRating] = useState(searchParams.get('minRating') || '');
 
-  // مزامنة الحالات إذا تغير الرابط من الخارج (مثل الروابط القادمة من الصفحة الرئيسية)
+  // فلاتر التوثيق والمطابقة الذكية
+  const [verifiedOnly, setVerifiedOnly] = useState(searchParams.get('verified') === '1');
+  const [availableOnly, setAvailableOnly] = useState(searchParams.get('available') === '1');
+  const [selectedShift, setSelectedShift] = useState(searchParams.get('shift') || '');
+  const [smartSort, setSmartSort] = useState(true);
+
   useEffect(() => {
     setSearch(searchParams.get('q') || '');
     setCategory(searchParams.get('category') || '');
@@ -28,6 +44,9 @@ export default function ServicesPage() {
     setMinPrice(searchParams.get('minPrice') || '');
     setMaxPrice(searchParams.get('maxPrice') || '');
     setMinRating(searchParams.get('minRating') || '');
+    setVerifiedOnly(searchParams.get('verified') === '1');
+    setAvailableOnly(searchParams.get('available') === '1');
+    setSelectedShift(searchParams.get('shift') || '');
   }, [searchParams]);
 
   const fetchListings = useCallback(async () => {
@@ -49,7 +68,7 @@ export default function ServicesPage() {
     if (maxPrice) query = query.lte('price', Number(maxPrice));
     if (minRating) query = query.gte('rating', Number(minRating));
 
-    const { data } = await query.limit(50);
+    const { data } = await query.limit(80);
     setListings((data as Listing[]) || []);
     setLoadingListings(false);
   }, [search, category, city, minPrice, maxPrice, minRating, categories]);
@@ -58,6 +77,86 @@ export default function ServicesPage() {
     if (!loading) fetchListings();
   }, [fetchListings, loading]);
 
+  // حساب درجة المطابقة الذكية (Smart Matching Score)
+  const calculateSmartScore = useCallback(
+    (item: Listing) => {
+      const provider = (item.provider || {}) as Record<string, any>;
+      const userProfile = (profile || {}) as Record<string, any>;
+
+      let score = 0;
+
+      // 1. التوثيق بالبطاقة الشخصية (أعلى أولوية للأمان)
+      if (provider.is_verified || provider.provider_verified) {
+        score += 35;
+      }
+
+      // 2. التوفر الفوري للعمل
+      if (provider.is_available_now !== false) {
+        score += 25;
+      }
+
+      // 3. الخدمة المميزة
+      if (item.featured) {
+        score += 10;
+      }
+
+      // 4. القرب الجغرافي (المدينة والحي)
+      const targetCity = city || userProfile.city;
+      if (targetCity && (item.city === targetCity || provider.city === targetCity)) {
+        score += 15;
+      }
+      if (
+        userProfile.district &&
+        provider.district &&
+        String(provider.district).trim() === String(userProfile.district).trim()
+      ) {
+        score += 15;
+      }
+
+      // 5. مطابقة الوردية المطلوبة
+      if (
+        selectedShift &&
+        Array.isArray(provider.available_shifts) &&
+        provider.available_shifts.includes(selectedShift)
+      ) {
+        score += 12;
+      }
+
+      // 6. سنوات الخبرة (حد أقصى 10 نقاط)
+      const expYears = Number(provider.experience_years || 0);
+      score += Math.min(expYears * 2, 10);
+
+      // 7. التقييم ومؤشر الالتزام
+      const ratingVal = Number(item.rating || 0);
+      const commitmentVal = Number(provider.commitment_score ?? 5);
+      score += ratingVal * 2 + commitmentVal;
+
+      return score;
+    },
+    [city, profile, selectedShift]
+  );
+
+  // تطبيق فلاتر التوثيق/التوفر/الوردية وترتيب المطابقة الذكية
+  const displayedListings = useMemo(() => {
+    const filtered = listings.filter((item) => {
+      const provider = (item.provider || {}) as Record<string, any>;
+      const isVerified = Boolean(provider.is_verified || provider.provider_verified);
+      const isAvailable = provider.is_available_now !== false;
+
+      if (verifiedOnly && !isVerified) return false;
+      if (availableOnly && !isAvailable) return false;
+      if (selectedShift) {
+        const shifts = Array.isArray(provider.available_shifts) ? provider.available_shifts : [];
+        if (!shifts.includes(selectedShift)) return false;
+      }
+      return true;
+    });
+
+    if (!smartSort) return filtered;
+
+    return [...filtered].sort((a, b) => calculateSmartScore(b) - calculateSmartScore(a));
+  }, [listings, verifiedOnly, availableOnly, selectedShift, smartSort, calculateSmartScore]);
+
   const syncUrlParams = (overrides?: {
     q?: string;
     category?: string;
@@ -65,6 +164,9 @@ export default function ServicesPage() {
     minPrice?: string;
     maxPrice?: string;
     minRating?: string;
+    verified?: boolean;
+    available?: boolean;
+    shift?: string;
   }) => {
     const next = {
       q: overrides?.q !== undefined ? overrides.q : search,
@@ -73,6 +175,9 @@ export default function ServicesPage() {
       minPrice: overrides?.minPrice !== undefined ? overrides.minPrice : minPrice,
       maxPrice: overrides?.maxPrice !== undefined ? overrides.maxPrice : maxPrice,
       minRating: overrides?.minRating !== undefined ? overrides.minRating : minRating,
+      verified: overrides?.verified !== undefined ? overrides.verified : verifiedOnly,
+      available: overrides?.available !== undefined ? overrides.available : availableOnly,
+      shift: overrides?.shift !== undefined ? overrides.shift : selectedShift,
     };
 
     const params = new URLSearchParams();
@@ -82,12 +187,27 @@ export default function ServicesPage() {
     if (next.minPrice) params.set('minPrice', next.minPrice);
     if (next.maxPrice) params.set('maxPrice', next.maxPrice);
     if (next.minRating) params.set('minRating', next.minRating);
+    if (next.verified) params.set('verified', '1');
+    if (next.available) params.set('available', '1');
+    if (next.shift) params.set('shift', next.shift);
     setSearchParams(params);
   };
 
   const handleSelectCategory = (selectedCat: string) => {
     setCategory(selectedCat);
     syncUrlParams({ category: selectedCat });
+  };
+
+  const toggleVerifiedFilter = () => {
+    const nextVal = !verifiedOnly;
+    setVerifiedOnly(nextVal);
+    syncUrlParams({ verified: nextVal });
+  };
+
+  const toggleAvailableFilter = () => {
+    const nextVal = !availableOnly;
+    setAvailableOnly(nextVal);
+    syncUrlParams({ available: nextVal });
   };
 
   const applyFilters = () => {
@@ -102,11 +222,23 @@ export default function ServicesPage() {
     setMinPrice('');
     setMaxPrice('');
     setMinRating('');
+    setVerifiedOnly(false);
+    setAvailableOnly(false);
+    setSelectedShift('');
     setSearchParams({});
     setShowFilters(false);
   };
 
-  const activeFilters = [category, city, minPrice, maxPrice, minRating].filter(Boolean).length;
+  const activeFilters = [
+    category,
+    city,
+    minPrice,
+    maxPrice,
+    minRating,
+    verifiedOnly ? '1' : '',
+    availableOnly ? '1' : '',
+    selectedShift,
+  ].filter(Boolean).length;
 
   return (
     <div className="pb-20 md:pb-8">
@@ -144,6 +276,48 @@ export default function ServicesPage() {
             </button>
           </div>
 
+          {/* أزرار المطابقة الذكية والتوثيق والتوفر السريعة */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSmartSort(!smartSort)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                smartSort
+                  ? 'bg-primary-50 text-primary-700 ring-1 ring-primary-200'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Sparkles size={14} className={smartSort ? 'text-primary-600' : 'text-slate-400'} />
+              المطابقة الذكية {smartSort ? 'مفعّلة' : ''}
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleVerifiedFilter}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                verifiedOnly
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+              }`}
+            >
+              <ShieldCheck size={14} />
+              موثقون فقط
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleAvailableFilter}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                availableOnly
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              }`}
+            >
+              <span className={`h-2 w-2 rounded-full ${availableOnly ? 'bg-white' : 'bg-emerald-500'}`} />
+              متاحون الآن
+            </button>
+          </div>
+
           {/* Quick category tabs */}
           <div className="mt-4 flex gap-2 overflow-x-auto no-scrollbar pb-1">
             <button
@@ -174,11 +348,11 @@ export default function ServicesPage() {
         <div className="fixed inset-0 z-50 md:relative md:z-auto" onClick={() => setShowFilters(false)}>
           <div className="absolute inset-0 bg-black/30 md:hidden" />
           <div
-            className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-white p-6 md:relative md:rounded-3xl md:max-w-md md:mx-auto animate-slide-up"
+            className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-white p-6 md:relative md:rounded-3xl md:max-w-md md:mx-auto md:mt-4 animate-slide-up max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-black text-slate-800">الفلاتر</h3>
+              <h3 className="text-lg font-black text-slate-800">الفلاتر والمطابقة</h3>
               <button onClick={() => setShowFilters(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={22} />
               </button>
@@ -203,6 +377,20 @@ export default function ServicesPage() {
                   <option value="">كل المدن</option>
                   {cities.map((c) => (
                     <option key={c.id} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Shift */}
+              <div>
+                <label className="flex items-center gap-1.5 text-sm font-bold text-slate-700 mb-2">
+                  <Clock size={15} className="text-primary-600" />
+                  وقت / وردية العمل
+                </label>
+                <select value={selectedShift} onChange={(e) => setSelectedShift(e.target.value)} className="input-field">
+                  <option value="">كل الأوقات</option>
+                  {SHIFT_OPTIONS.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
                   ))}
                 </select>
               </div>
@@ -242,9 +430,16 @@ export default function ServicesPage() {
 
       {/* Results */}
       <div className="mx-auto max-w-6xl px-4 py-6">
-        <p className="text-sm text-slate-500 mb-4">
-          {loadingListings ? 'جاري التحميل...' : `${listings.length} خدمة متاحة`}
-        </p>
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-sm text-slate-500">
+            {loadingListings ? 'جاري التحميل...' : `${displayedListings.length} خدمة متاحة`}
+          </p>
+          {smartSort && !loadingListings && displayedListings.length > 0 && (
+            <span className="text-xs font-bold text-primary-600 flex items-center gap-1">
+              <Sparkles size={13} /> مرتبة حسب الأنسب لك
+            </span>
+          )}
+        </div>
 
         {loadingListings ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -259,7 +454,7 @@ export default function ServicesPage() {
               </div>
             ))}
           </div>
-        ) : listings.length === 0 ? (
+        ) : displayedListings.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 mb-4">
               <Inbox size={32} className="text-slate-400" />
@@ -274,7 +469,7 @@ export default function ServicesPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {listings.map((listing) => (
+            {displayedListings.map((listing) => (
               <ListingCard key={listing.id} listing={listing} />
             ))}
           </div>

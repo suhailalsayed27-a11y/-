@@ -3,8 +3,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Tag, MapPin, Users, ClipboardList, Settings,
   LogOut, Menu, X, CheckCircle, XCircle, Eye, EyeOff, Trash2, Edit3, Plus,
-  TrendingUp, UserCheck, Package, ArrowLeft, Search, Star, Shield,
-  Megaphone, Loader2, Scale, Wallet, ArrowRightLeft, Clock, Phone, Mail, User, AlertTriangle,
+  TrendingUp, UserCheck, Package, ArrowLeft, Search, Star, Shield, ShieldCheck,
+  Megaphone, Loader2, Scale, Wallet, ArrowRightLeft, Clock, Phone, Mail, User, AlertTriangle, IdCard,
   type LucideIcon
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -14,7 +14,7 @@ import Logo from '@/components/Logo';
 import type { Profile, Listing, Order, Category, City, Dispute } from '@/types';
 import { formatYER } from '@/lib/commission';
 
-type Section = 'dashboard' | 'listings' | 'categories' | 'cities' | 'users' | 'providers' | 'orders' | 'disputes' | 'finance' | 'homepage' | 'notifications';
+type Section = 'dashboard' | 'listings' | 'categories' | 'cities' | 'users' | 'providers' | 'verifications' | 'orders' | 'disputes' | 'finance' | 'homepage' | 'notifications';
 
 export default function AdminPage() {
   const { profile, loading } = useAuth();
@@ -47,6 +47,7 @@ export default function AdminPage() {
     { key: 'cities', label: 'المدن', icon: MapPin },
     { key: 'users', label: 'المستخدمون', icon: Users },
     { key: 'providers', label: 'مقدمو الخدمات', icon: UserCheck },
+    { key: 'verifications', label: 'توثيق الهويات', icon: ShieldCheck },
     { key: 'orders', label: 'الطلبات', icon: ClipboardList },
     { key: 'disputes', label: 'النزاعات', icon: Scale },
     { key: 'finance', label: 'المالية والمحافظ', icon: Wallet },
@@ -143,6 +144,7 @@ export default function AdminPage() {
           {section === 'cities' && <CitiesSection />}
           {section === 'users' && <UsersSection />}
           {section === 'providers' && <ProvidersSection />}
+          {section === 'verifications' && <VerificationsSection />}
           {section === 'orders' && <OrdersSection />}
           {section === 'disputes' && <DisputesSection />}
           {section === 'finance' && <FinanceSection />}
@@ -158,7 +160,7 @@ export default function AdminPage() {
 function DashboardSection() {
   const [stats, setStats] = useState({
     totalUsers: 0, providers: 0, clients: 0, listings: 0, orders: 0,
-    pendingListings: 0, pendingProviders: 0, totalWalletBalances: 0
+    pendingListings: 0, pendingProviders: 0, pendingVerifications: 0, totalWalletBalances: 0
   });
   const [categoryStats, setCategoryStats] = useState<{ name: string; count: number }[]>([]);
   const [cityStats, setCityStats] = useState<{ name: string; count: number }[]>([]);
@@ -166,7 +168,7 @@ function DashboardSection() {
 
   useEffect(() => {
     (async () => {
-      const [usersRes, provRes, clientRes, listRes, orderRes, pendListRes, pendProvRes, walletsRes] = await Promise.all([
+      const [usersRes, provRes, clientRes, listRes, orderRes, pendListRes, pendProvRes, pendVerifRes, walletsRes] = await Promise.all([
         supabase.from('profiles').select('id', { count: 'exact', head: true }),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).neq('account_type', 'client'),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('account_type', 'client'),
@@ -174,6 +176,7 @@ function DashboardSection() {
         supabase.from('orders').select('id', { count: 'exact', head: true }),
         supabase.from('listings').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('provider_status', 'pending').neq('account_type', 'client'),
+        supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('verification_status', 'pending').neq('account_type', 'client'),
         supabase.from('wallets').select('balance')
       ]);
 
@@ -187,6 +190,7 @@ function DashboardSection() {
         orders: orderRes.count || 0,
         pendingListings: pendListRes.count || 0,
         pendingProviders: pendProvRes.count || 0,
+        pendingVerifications: pendVerifRes.count || 0,
         totalWalletBalances
       });
 
@@ -224,7 +228,7 @@ function DashboardSection() {
   return (
     <div className="space-y-6">
       {/* Pending alerts */}
-      {(stats.pendingListings > 0 || stats.pendingProviders > 0) && (
+      {(stats.pendingListings > 0 || stats.pendingProviders > 0 || stats.pendingVerifications > 0) && (
         <div className="flex flex-wrap gap-3">
           {stats.pendingListings > 0 && (
             <Link to="/admin/listings" className="card flex items-center gap-3 px-4 py-3 !bg-accent-50 !ring-accent-100">
@@ -236,6 +240,12 @@ function DashboardSection() {
             <Link to="/admin/providers" className="card flex items-center gap-3 px-4 py-3 !bg-blue-50 !ring-blue-100">
               <UserCheck size={20} className="text-blue-600" />
               <span className="text-sm font-bold text-blue-700">{stats.pendingProviders} مقدم خدمة بانتظار الموافقة</span>
+            </Link>
+          )}
+          {stats.pendingVerifications > 0 && (
+            <Link to="/admin/verifications" className="card flex items-center gap-3 px-4 py-3 !bg-emerald-50 !ring-emerald-100">
+              <ShieldCheck size={20} className="text-emerald-600" />
+              <span className="text-sm font-bold text-emerald-700">{stats.pendingVerifications} هوية شخصية بانتظار التوثيق</span>
             </Link>
           )}
         </div>
@@ -313,7 +323,6 @@ function ListingsSection() {
   const [editing, setEditing] = useState<Listing | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
-  // حالات نافذة رفض الخدمة مع سبب الرفض
   const [rejectingListing, setRejectingListing] = useState<Listing | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
@@ -341,7 +350,6 @@ function ListingsSection() {
       return;
     }
 
-    // إشعار صاحب الخدمة عند القبول
     const targetListing = listings.find((l) => l.id === id);
     if (status === 'published' && targetListing?.provider_id) {
       await supabase.from('notifications').insert({
@@ -384,7 +392,6 @@ function ListingsSection() {
       return;
     }
 
-    // إرسال إشعار لصاحب الخدمة يتضمن سبب الرفض
     if (rejectingListing.provider_id) {
       await supabase.from('notifications').insert({
         user_id: rejectingListing.provider_id,
@@ -544,7 +551,6 @@ function ListingsSection() {
         {filtered.length === 0 && <EmptyState text="لا توجد خدمات" />}
       </div>
 
-      {/* نافذة كتابة سبب رفض الخدمة */}
       {rejectingListing && (
         <Modal
           title="رفض الخدمة وإرسال السبب"
@@ -823,7 +829,6 @@ function CategoriesSection() {
                 </div>
               </div>
 
-              {/* Services list */}
               <div className="flex flex-wrap gap-2">
                 {catServices.map((s) => (
                   <span key={s.id} className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-1.5 text-sm text-slate-600 border border-slate-100">
@@ -1029,7 +1034,7 @@ function CitiesSection() {
 
 // ============ USERS ============
 function UsersSection() {
-  const [users, setUsers] = useState<Profile[]>([]);
+  const [users, setUsers] = useState<(Profile & { is_verified?: boolean })[]>([]);
   const [wallets, setWallets] = useState<{user_id: string, balance: number}[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -1040,7 +1045,7 @@ function UsersSection() {
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         supabase.from('wallets').select('user_id, balance')
       ]);
-      setUsers((usersData as Profile[]) || []);
+      setUsers((usersData as (Profile & { is_verified?: boolean })[]) || []);
       setWallets(walletsData || []);
       setLoading(false);
     })();
@@ -1103,6 +1108,11 @@ function UsersSection() {
                         </div>
                       )}
                       <span className="font-bold text-slate-800">{u.full_name}</span>
+                      {u.is_verified && (
+                        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-700">
+                          <ShieldCheck size={11} /> موثق
+                        </span>
+                      )}
                       {u.is_admin && <Shield size={14} className="text-primary-500" />}
                     </div>
                   </td>
@@ -1149,7 +1159,7 @@ function UsersSection() {
 
 // ============ PROVIDERS ============
 function ProvidersSection() {
-  const [providers, setProviders] = useState<Profile[]>([]);
+  const [providers, setProviders] = useState<(Profile & { is_verified?: boolean; verification_status?: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
 
@@ -1160,14 +1170,29 @@ function ProvidersSection() {
         .select('*')
         .neq('account_type', 'client')
         .order('created_at', { ascending: false });
-      setProviders((data as Profile[]) || []);
+      setProviders((data as (Profile & { is_verified?: boolean; verification_status?: string })[]) || []);
       setLoading(false);
     })();
   }, []);
 
   const updateStatus = async (id: string, status: string, verified: boolean) => {
-    await supabase.from('profiles').update({ provider_status: status, provider_verified: verified }).eq('id', id);
-    setProviders(providers.map((p) => p.id === id ? { ...p, provider_status: status as Profile['provider_status'], provider_verified: verified } : p));
+    await supabase
+      .from('profiles')
+      .update({
+        provider_status: status,
+        provider_verified: verified,
+        is_verified: verified,
+        verification_status: verified ? 'verified' : 'rejected',
+      })
+      .eq('id', id);
+
+    setProviders(
+      providers.map((p) =>
+        p.id === id
+          ? { ...p, provider_status: status as Profile['provider_status'], provider_verified: verified, is_verified: verified }
+          : p
+      )
+    );
   };
 
   const filtered = filter === 'all' ? providers : providers.filter((p) => p.provider_status === filter);
@@ -1176,23 +1201,29 @@ function ProvidersSection() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 overflow-x-auto no-scrollbar">
-        {[
-          { key: 'all', label: 'الكل' },
-          { key: 'pending', label: 'بانتظار الموافقة' },
-          { key: 'approved', label: 'موافق عليه' },
-          { key: 'rejected', label: 'مرفوض' },
-        ].map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold ${
-              filter === f.key ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {[
+            { key: 'all', label: 'الكل' },
+            { key: 'pending', label: 'بانتظار الموافقة' },
+            { key: 'approved', label: 'موافق عليه' },
+            { key: 'rejected', label: 'مرفوض' },
+          ].map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold ${
+                filter === f.key ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        <Link to="/admin/verifications" className="btn-primary !py-2 !text-xs">
+          <ShieldCheck size={16} /> مراجعة البطاقات الشخصية
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1207,9 +1238,16 @@ function ProvidersSection() {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <p className="font-bold text-slate-800 truncate">{p.full_name}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="font-bold text-slate-800 truncate">{p.full_name}</p>
+                  {p.is_verified && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+                      <ShieldCheck size={12} /> موثق
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm text-slate-500 truncate" dir="ltr">{p.email}</p>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-xs text-slate-400">{p.city || 'غير محدد'}</span>
                   <span className={`badge ${
                     p.provider_status === 'approved' ? 'bg-success-100 text-success-700' :
@@ -1225,7 +1263,7 @@ function ProvidersSection() {
             <div className="mt-3 flex gap-2">
               {p.provider_status !== 'approved' && (
                 <button onClick={() => updateStatus(p.id, 'approved', true)} className="btn-primary !py-2 !text-xs flex-1">
-                  <CheckCircle size={16} /> قبول
+                  <CheckCircle size={16} /> قبول وتوثيق
                 </button>
               )}
               {p.provider_status !== 'rejected' && (
@@ -1241,6 +1279,369 @@ function ProvidersSection() {
         ))}
         {filtered.length === 0 && <EmptyState text="لا يوجد مقدمو خدمات" />}
       </div>
+    </div>
+  );
+}
+
+// ============ IDENTITY VERIFICATIONS ============
+interface VerifiableProfile {
+  id: string;
+  full_name: string;
+  email: string;
+  phone?: string;
+  city?: string;
+  district?: string;
+  bio?: string;
+  experience_years?: number;
+  id_front_url?: string | null;
+  id_back_url?: string | null;
+  verification_status?: string;
+  is_verified?: boolean;
+  created_at: string;
+}
+
+function VerificationsSection() {
+  const [items, setItems] = useState<VerifiableProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'pending' | 'verified' | 'rejected' | 'all'>('pending');
+  const [viewingDocs, setViewingDocs] = useState<{
+    profile: VerifiableProfile;
+    frontUrl: string | null;
+    backUrl: string | null;
+  } | null>(null);
+  const [loadingDocsId, setLoadingDocsId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<VerifiableProfile | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const loadVerifications = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, phone, city, district, bio, experience_years, id_front_url, id_back_url, verification_status, is_verified, created_at')
+      .neq('account_type', 'client')
+      .order('created_at', { ascending: false });
+
+    setItems((data as VerifiableProfile[]) || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadVerifications();
+  }, []);
+
+  const openIdPreview = async (p: VerifiableProfile) => {
+    if (!p.id_front_url && !p.id_back_url) {
+      alert('لم يقم مقدم الخدمة برفع صور البطاقة الشخصية بعد.');
+      return;
+    }
+
+    setLoadingDocsId(p.id);
+    let frontUrl: string | null = null;
+    let backUrl: string | null = null;
+
+    if (p.id_front_url) {
+      const { data } = await supabase.storage
+        .from('identity_documents')
+        .createSignedUrl(p.id_front_url, 600);
+      frontUrl = data?.signedUrl || null;
+    }
+
+    if (p.id_back_url) {
+      const { data } = await supabase.storage
+        .from('identity_documents')
+        .createSignedUrl(p.id_back_url, 600);
+      backUrl = data?.signedUrl || null;
+    }
+
+    setLoadingDocsId(null);
+    setViewingDocs({ profile: p, frontUrl, backUrl });
+  };
+
+  const approveVerification = async (p: VerifiableProfile) => {
+    setActionBusy(true);
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        is_verified: true,
+        provider_verified: true,
+        provider_status: 'approved',
+        verification_status: 'verified',
+      })
+      .eq('id', p.id);
+
+    if (error) {
+      setActionBusy(false);
+      alert('حدث خطأ: ' + error.message);
+      return;
+    }
+
+    await supabase.from('notifications').insert({
+      user_id: p.id,
+      type: 'system',
+      title: 'تم توثيق حسابك بنجاح ✓',
+      body: 'مبارك! تم التحقق من هويتك وتفعيل شارة (موثق) بجانب اسمك لزيادة ثقة أصحاب المطاعم والعملاء.',
+      link: '/profile',
+    });
+
+    setActionBusy(false);
+    setViewingDocs(null);
+    loadVerifications();
+  };
+
+  const confirmRejectVerification = async () => {
+    if (!rejectTarget || !rejectReason.trim()) return;
+    setActionBusy(true);
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        is_verified: false,
+        provider_verified: false,
+        verification_status: 'rejected',
+      })
+      .eq('id', rejectTarget.id);
+
+    if (error) {
+      setActionBusy(false);
+      alert('حدث خطأ: ' + error.message);
+      return;
+    }
+
+    await supabase.from('notifications').insert({
+      user_id: rejectTarget.id,
+      type: 'system',
+      title: 'تم رفض طلب توثيق الهوية',
+      body: `لم يتم قبول توثيق هويتك. السبب: ${rejectReason.trim()}`,
+      link: '/profile',
+    });
+
+    setActionBusy(false);
+    setRejectTarget(null);
+    setRejectReason('');
+    setViewingDocs(null);
+    loadVerifications();
+  };
+
+  const filtered = items.filter((item) => {
+    if (filter === 'all') return true;
+    if (filter === 'verified') return item.is_verified === true || item.verification_status === 'verified';
+    return item.verification_status === filter;
+  });
+
+  if (loading) return <LoadingSpinner />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {[
+            { key: 'pending', label: `بانتظار المراجعة (${items.filter((i) => i.verification_status === 'pending').length})` },
+            { key: 'verified', label: `موثقون (${items.filter((i) => i.is_verified).length})` },
+            { key: 'rejected', label: 'مرفوضة' },
+            { key: 'all', label: 'الكل' },
+          ].map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key as typeof filter)}
+              className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+                filter === f.key ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {filtered.map((p) => (
+          <div key={p.id} className="card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1 min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-slate-800">{p.full_name}</h3>
+                {p.is_verified ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+                    <ShieldCheck size={14} /> موثق
+                  </span>
+                ) : p.verification_status === 'pending' ? (
+                  <span className="badge bg-accent-100 text-accent-700">بانتظار فحص البطاقة</span>
+                ) : p.verification_status === 'rejected' ? (
+                  <span className="badge bg-error-100 text-error-700">مرفوض</span>
+                ) : (
+                  <span className="badge bg-slate-100 text-slate-500">لم يرفع البطاقة</span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                <span>المدينة: {p.city || 'غير محدد'} {p.district ? `- ${p.district}` : ''}</span>
+                {p.phone && <span dir="ltr">{p.phone}</span>}
+                {typeof p.experience_years === 'number' && p.experience_years > 0 && (
+                  <span>الخبرة: {p.experience_years} سنوات</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 pt-1 text-xs">
+                <span className={p.id_front_url ? 'text-success-600 font-bold' : 'text-slate-400'}>
+                  {p.id_front_url ? '✓ الوجه الأمامي مرفوع' : '✗ الوجه الأمامي ناقص'}
+                </span>
+                <span className={p.id_back_url ? 'text-success-600 font-bold' : 'text-slate-400'}>
+                  {p.id_back_url ? '✓ الوجه الخلفي مرفوع' : '✗ الوجه الخلفي ناقص'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={() => openIdPreview(p)}
+                disabled={loadingDocsId === p.id || (!p.id_front_url && !p.id_back_url)}
+                className="btn-ghost !bg-slate-100 !px-3 !py-2 !text-xs font-bold flex items-center gap-1.5 disabled:opacity-40"
+              >
+                {loadingDocsId === p.id ? <Loader2 size={15} className="animate-spin" /> : <IdCard size={15} />}
+                فحص البطاقة
+              </button>
+
+              {!p.is_verified && (
+                <button
+                  onClick={() => approveVerification(p)}
+                  disabled={actionBusy}
+                  className="btn-primary !px-3.5 !py-2 !text-xs flex items-center gap-1.5"
+                >
+                  <CheckCircle size={15} /> توثيق وتفعيل الشارة
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setRejectTarget(p);
+                  setRejectReason('');
+                }}
+                disabled={actionBusy}
+                className="btn-ghost !bg-error-50 !text-error-600 !px-3 !py-2 !text-xs font-bold flex items-center gap-1"
+              >
+                <XCircle size={15} /> رفض
+              </button>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <EmptyState text="لا توجد طلبات توثيق في هذا القسم" />}
+      </div>
+
+      {/* نافذة معاينة صور البطاقة الشخصية */}
+      {viewingDocs && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setViewingDocs(null)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-3xl bg-white p-6 max-h-[90vh] overflow-y-auto space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-lg font-black text-slate-800">فحص البطاقة الشخصية: {viewingDocs.profile.full_name}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {viewingDocs.profile.city || ''} • {viewingDocs.profile.phone || ''}
+                </p>
+              </div>
+              <button onClick={() => setViewingDocs(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50">
+                <p className="text-xs font-bold text-slate-700 mb-2">الوجه الأمامي للبطاقة:</p>
+                {viewingDocs.frontUrl ? (
+                  <img
+                    src={viewingDocs.frontUrl}
+                    alt="الوجه الأمامي"
+                    className="w-full h-60 object-contain rounded-xl bg-white"
+                  />
+                ) : (
+                  <div className="h-60 flex items-center justify-center text-xs text-slate-400">غير مرفوع</div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50">
+                <p className="text-xs font-bold text-slate-700 mb-2">الوجه الخلفي للبطاقة:</p>
+                {viewingDocs.backUrl ? (
+                  <img
+                    src={viewingDocs.backUrl}
+                    alt="الوجه الخلفي"
+                    className="w-full h-60 object-contain rounded-xl bg-white"
+                  />
+                ) : (
+                  <div className="h-60 flex items-center justify-center text-xs text-slate-400">غير مرفوع</div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-2">
+              <button
+                onClick={() => approveVerification(viewingDocs.profile)}
+                disabled={actionBusy}
+                className="btn-primary flex-1"
+              >
+                <ShieldCheck size={18} /> اعتماد البيانات وتفعيل شارة (موثق)
+              </button>
+              <button
+                onClick={() => {
+                  setRejectTarget(viewingDocs.profile);
+                  setRejectReason('');
+                }}
+                disabled={actionBusy}
+                className="btn-ghost !bg-error-50 !text-error-600 flex-1"
+              >
+                <XCircle size={18} /> رفض الطلب
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* نافذة رفض التوثيق مع سبب */}
+      {rejectTarget && (
+        <Modal
+          title="رفض طلب التوثيق"
+          onClose={() => !actionBusy && setRejectTarget(null)}
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              مقدم الخدمة: <strong className="text-slate-800">{rejectTarget.full_name}</strong>
+            </p>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                سبب الرفض (سيصل كإشعار لمقدم الخدمة لإعادة التصوير) *
+              </label>
+              <textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="مثال: الصورة غير واضحة أو بيانات البطاقة غير مطابقة للاسم المسجل..."
+                rows={3}
+                className="input-field resize-none"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setRejectTarget(null)}
+                disabled={actionBusy}
+                className="btn-ghost flex-1 !bg-slate-100"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmRejectVerification}
+                disabled={actionBusy || !rejectReason.trim()}
+                className="btn-primary flex-1 !bg-error-600 disabled:opacity-50"
+              >
+                {actionBusy ? 'جاري الإرسال...' : 'تأكيد الرفض'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1639,7 +2040,6 @@ function DisputesSection() {
         </div>
       )}
 
-      {/* نافذة تفاصيل النزاع الكاملة */}
       {selectedDispute && (() => {
         const info = getDisputeLifecycle(selectedDispute);
         const listing = selectedDispute.order?.listing;
@@ -1656,7 +2056,6 @@ function DisputesSection() {
               className="w-full max-w-2xl rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[90vh] overflow-y-auto animate-slide-up space-y-5"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1674,7 +2073,6 @@ function DisputesSection() {
                 </button>
               </div>
 
-              {/* تنبيه فاتح النزاع والمرحلة */}
               <div className="rounded-2xl bg-error-50 border border-error-100 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-error-700 font-bold text-sm">
                   <AlertTriangle size={18} />
@@ -1693,7 +2091,6 @@ function DisputesSection() {
                 </div>
               </div>
 
-              {/* بيانات الخدمة ونوعها */}
               <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-2">
                 <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
                   <Package size={16} className="text-primary-600" />
@@ -1718,9 +2115,7 @@ function DisputesSection() {
                 </div>
               </div>
 
-              {/* بيانات العميل ومقدم الخدمة */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* العميل */}
                 <div className={`rounded-2xl border p-4 space-y-2 ${!info.isOpenedByProvider ? 'border-blue-300 bg-blue-50/40' : 'border-slate-200 bg-white'}`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full">بيانات العميل</span>
@@ -1746,7 +2141,6 @@ function DisputesSection() {
                   </p>
                 </div>
 
-                {/* مقدم الخدمة */}
                 <div className={`rounded-2xl border p-4 space-y-2 ${info.isOpenedByProvider ? 'border-purple-300 bg-purple-50/40' : 'border-slate-200 bg-white'}`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-purple-700 bg-purple-100 px-2.5 py-0.5 rounded-full">بيانات مقدم الخدمة</span>
@@ -1773,7 +2167,6 @@ function DisputesSection() {
                 </div>
               </div>
 
-              {/* الخط الزمني للتواريخ والأوقات */}
               <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
                 <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
                   <Clock size={16} className="text-primary-600" />
@@ -1819,7 +2212,6 @@ function DisputesSection() {
                 </div>
               )}
 
-              {/* أزرار الإجراء */}
               <div className="flex gap-2 pt-2">
                 <button
                   onClick={() => setSelectedDispute(null)}
@@ -1842,7 +2234,6 @@ function DisputesSection() {
         );
       })()}
 
-      {/* Resolve modal */}
       {resolveModal && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40" onClick={() => !actionLoading && setResolveModal(null)}>
           <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-white p-6 animate-slide-up" onClick={(e) => e.stopPropagation()}>
@@ -1985,7 +2376,6 @@ function FinanceSection() {
     <div className="space-y-6">
       <h2 className="font-bold text-slate-800">المالية والمحافظ الحقيقية</h2>
 
-      {/* TABS */}
       <div className="flex gap-2 overflow-x-auto no-scrollbar">
         <button onClick={() => setTab('overview')} className={`shrink-0 rounded-full px-5 py-2 text-sm font-bold transition-colors ${tab === 'overview' ? 'bg-primary-600 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
           نظرة عامة وإعدادات
@@ -2000,7 +2390,6 @@ function FinanceSection() {
 
       {tab === 'overview' && (
         <div className="space-y-6 animate-fade-in">
-          {/* Financial stats */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <div className="card p-5">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 mb-3">
@@ -2025,7 +2414,6 @@ function FinanceSection() {
             </div>
           </div>
 
-          {/* Commission settings */}
           <div className="card p-5">
             <h3 className="font-bold text-slate-800 mb-4">إعدادات العمولة</h3>
             <div className="grid grid-cols-2 gap-4">

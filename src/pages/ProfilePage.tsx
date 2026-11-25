@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  MapPin, LogOut, Plus, ClipboardList, Star, Shield, Phone, Briefcase,
+  MapPin, LogOut, Plus, ClipboardList, Star, Shield, ShieldCheck, Phone, Briefcase,
   Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon,
-  ArrowRightLeft, Edit3, Trash2, RefreshCw
+  ArrowRightLeft, Edit3, Trash2, RefreshCw, IdCard, Upload, Clock
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,6 +14,13 @@ import ListingCard from '@/components/ListingCard';
 
 type Tab = 'services' | 'orders' | 'reviews' | 'edit' | 'wallet';
 type UserListing = Listing & { rejection_reason?: string | null };
+
+const SHIFT_OPTIONS = [
+  { id: 'morning', label: 'فترة صباحية' },
+  { id: 'evening', label: 'فترة مسائية' },
+  { id: 'full_day', label: 'دوام كامل' },
+  { id: 'urgent', label: 'طوارئ / فوري' },
+];
 
 export default function ProfilePage() {
   const { profile, session, loading, signOut, refreshProfile } = useAuth();
@@ -39,14 +46,28 @@ export default function ProfilePage() {
   const [savingListing, setSavingListing] = useState(false);
   const [listingEditError, setListingEditError] = useState<string | null>(null);
 
-  // Edit Profile form state
+  // Edit Profile & Smart Matching form state
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editCity, setEditCity] = useState('');
+  const [editDistrict, setEditDistrict] = useState('');
+  const [editExperienceYears, setEditExperienceYears] = useState<number>(0);
+  const [isAvailableNow, setIsAvailableNow] = useState<boolean>(true);
+  const [availableShifts, setAvailableShifts] = useState<string[]>([]);
   const [editBio, setEditBio] = useState('');
   const [editAvatar, setEditAvatar] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
+
+  // Identity Verification State
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [frontPreview, setFrontPreview] = useState<string | null>(null);
+  const [backPreview, setBackPreview] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState(false);
+  const [idMessage, setIdMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Admin promote state
   const [showAdminPromote, setShowAdminPromote] = useState(false);
   const [adminCode, setAdminCode] = useState('');
   const [adminError, setAdminError] = useState<string | null>(null);
@@ -60,7 +81,6 @@ export default function ProfilePage() {
 
   const fetchUserData = async () => {
     if (!profile) return;
-    // 1. Fetch Listings and Orders
     const [listRes, orderRes] = await Promise.all([
       supabase
         .from('listings')
@@ -77,7 +97,6 @@ export default function ProfilePage() {
     setMyListings((listRes.data as UserListing[]) || []);
     setMyOrders((orderRes.data as Order[]) || []);
 
-    // 2. Fetch Wallet & Transactions
     const { data: wData } = await supabase.from('wallets').select('id, balance').eq('user_id', profile.id).maybeSingle();
     if (wData) {
       setWalletBalance(Number(wData.balance));
@@ -85,7 +104,6 @@ export default function ProfilePage() {
       setTransactions(tData || []);
     }
 
-    // 3. Fetch Reviews
     if ((listRes.data as UserListing[])?.length > 0) {
       const listingIds = (listRes.data as UserListing[]).map((l) => l.id);
       const revRes = await supabase
@@ -99,14 +117,95 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (!profile) return;
+    const p = profile as any;
     setEditName(profile.full_name);
     setEditPhone(profile.phone || '');
     setEditCity(profile.city || '');
+    setEditDistrict(p.district || '');
+    setEditExperienceYears(Number(p.experience_years || 0));
+    setIsAvailableNow(p.is_available_now !== false);
+    setAvailableShifts(Array.isArray(p.available_shifts) ? p.available_shifts : []);
     setEditBio(profile.bio || '');
     setEditAvatar(profile.avatar_url);
 
     fetchUserData();
   }, [profile]);
+
+  const toggleShift = (shiftId: string) => {
+    setAvailableShifts((prev) =>
+      prev.includes(shiftId) ? prev.filter((s) => s !== shiftId) : [...prev, shiftId]
+    );
+  };
+
+  const handleSelectIdImage = (side: 'front' | 'back', file?: File) => {
+    if (!file) return;
+    const previewUrl = URL.createObjectURL(file);
+    if (side === 'front') {
+      setFrontFile(file);
+      setFrontPreview(previewUrl);
+    } else {
+      setBackFile(file);
+      setBackPreview(previewUrl);
+    }
+    setIdMessage(null);
+  };
+
+  const handleUploadIdentityDocuments = async () => {
+    if (!profile || !session?.user) return;
+    if (!frontFile || !backFile) {
+      setIdMessage({ type: 'error', text: 'يرجى تصوير أو اختيار الوجه الأمامي والوجه الخلفي للبطاقة الشخصية معاً.' });
+      return;
+    }
+
+    setUploadingId(true);
+    setIdMessage(null);
+
+    try {
+      const uid = session.user.id;
+      const frontExt = frontFile.name.split('.').pop() || 'jpg';
+      const backExt = backFile.name.split('.').pop() || 'jpg';
+      const frontPath = `${uid}/id-front-${Date.now()}.${frontExt}`;
+      const backPath = `${uid}/id-back-${Date.now()}.${backExt}`;
+
+      const { error: frontErr } = await supabase.storage
+        .from('identity_documents')
+        .upload(frontPath, frontFile, { upsert: true });
+      if (frontErr) throw frontErr;
+
+      const { error: backErr } = await supabase.storage
+        .from('identity_documents')
+        .upload(backPath, backFile, { upsert: true });
+      if (backErr) throw backErr;
+
+      const { error: updateErr } = await supabase
+        .from('profiles')
+        .update({
+          id_front_url: frontPath,
+          id_back_url: backPath,
+          verification_status: 'pending',
+          is_verified: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', profile.id);
+
+      if (updateErr) throw updateErr;
+
+      await refreshProfile();
+      setFrontFile(null);
+      setBackFile(null);
+      setIdMessage({
+        type: 'success',
+        text: 'تم رفع صور البطاقة الشخصية بنجاح! جاري مراجعتها من إدارة المنصة لتفعيل شارة (موثق).',
+      });
+    } catch (err: any) {
+      setIdMessage({
+        type: 'error',
+        text: err?.message || 'تعذر رفع صور البطاقة، تأكد من اتصال الإنترنت وحجم الصور.',
+      });
+    } finally {
+      setUploadingId(false);
+    }
+  };
 
   const openEditListing = (listing: UserListing) => {
     setEditingListing(listing);
@@ -131,7 +230,6 @@ export default function ProfilePage() {
     setSavingListing(true);
     setListingEditError(null);
 
-    // الأدمن تبقى خدمته منشورة، ومقدم الخدمة العادي تعود للمراجعة (pending)
     const nextStatus = profile.is_admin ? 'published' : 'pending';
 
     const { error } = await supabase
@@ -177,6 +275,10 @@ export default function ProfilePage() {
         full_name: editName,
         phone: editPhone,
         city: editCity,
+        district: editDistrict.trim() || null,
+        experience_years: Number(editExperienceYears) || 0,
+        is_available_now: isAvailableNow,
+        available_shifts: availableShifts,
         bio: editBio,
         avatar_url: editAvatar,
         updated_at: new Date().toISOString(),
@@ -216,12 +318,17 @@ export default function ProfilePage() {
 
   if (!session || !profile) return null;
 
+  const pExtra = profile as any;
+  const isVerified = Boolean(pExtra.is_verified || profile.provider_verified);
+  const verificationStatus: string = pExtra.verification_status || (isVerified ? 'verified' : 'unverified');
+  const isProviderAccount = profile.account_type !== 'client';
+
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'services', label: 'الخدمات', count: myListings.length },
     { key: 'orders', label: 'الطلبات', count: myOrders.length },
     { key: 'wallet', label: 'المحفظة' },
     { key: 'reviews', label: 'التقييمات', count: myReviews.length },
-    { key: 'edit', label: 'الإعدادات' },
+    { key: 'edit', label: 'الإعدادات والتوثيق' },
   ];
 
   const getTxTypeLabel = (type: string) => {
@@ -264,24 +371,32 @@ export default function ProfilePage() {
               </div>
               <div className="flex-1 pb-1">
                 <p className="mb-0.5 text-xs font-bold text-primary-600">الملف الشخصي</p>
-                <h1 className="text-xl font-black text-slate-800">
-                  مرحبًا بك، {profile.full_name}
-                </h1>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-xl font-black text-slate-800">
+                    مرحبًا بك، {profile.full_name}
+                  </h1>
+                  {isVerified && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+                      <ShieldCheck size={14} />
+                      موثق
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap items-center gap-3 mt-1 text-sm text-slate-500">
                   {profile.city && (
                     <span className="flex items-center gap-1">
                       <MapPin size={14} className="text-primary-500" />
-                      {profile.city}
+                      {profile.city}{pExtra.district ? ` - ${pExtra.district}` : ''}
                     </span>
                   )}
                   <span className="flex items-center gap-1">
                     <Briefcase size={14} className="text-primary-500" />
                     {profile.account_type === 'provider' ? 'مقدم خدمة' : profile.account_type === 'client' ? 'عميل' : 'مقدم وعميل'}
                   </span>
-                  {profile.provider_verified && (
-                    <span className="flex items-center gap-1 text-success-600">
-                      <CheckCircle size={14} />
-                      موثق
+                  {isProviderAccount && (
+                    <span className={`inline-flex items-center gap-1 text-xs font-bold ${pExtra.is_available_now !== false ? 'text-emerald-600' : 'text-slate-400'}`}>
+                      <span className={`h-2 w-2 rounded-full ${pExtra.is_available_now !== false ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                      {pExtra.is_available_now !== false ? 'متاح للعمل' : 'غير متاح حالياً'}
                     </span>
                   )}
                 </div>
@@ -310,6 +425,43 @@ export default function ProfilePage() {
             )}
           </div>
         </div>
+
+        {/* تنبيه توثيق الهوية لمقدم الخدمة غير الموثق */}
+        {isProviderAccount && !isVerified && (
+          <div
+            onClick={() => setTab('edit')}
+            className={`card mb-6 flex cursor-pointer items-center justify-between gap-4 p-4 transition-colors ${
+              verificationStatus === 'pending'
+                ? 'border-amber-200 bg-amber-50/70 hover:bg-amber-50'
+                : 'border-blue-200 bg-blue-50/70 hover:bg-blue-50'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${
+                verificationStatus === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+              }`}>
+                <IdCard size={24} />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800">
+                  {verificationStatus === 'pending'
+                    ? 'طلب توثيق هويتك قيد المراجعة'
+                    : verificationStatus === 'rejected'
+                    ? 'تم رفض صورة البطاقة — يرجى إعادة الرفع'
+                    : 'وثّق حسابك بالبطاقة الشخصية واحصل على شارة (موثق)'}
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {verificationStatus === 'pending'
+                    ? 'تقوم إدارة المنصة بمراجعة بطاقتك وسيتم تفعيل الشارة قريباً.'
+                    : 'الحسابات الموثقة تظهر في مقدمة نتائج البحث وتكسب ثقة أصحاب المطاعم والعملاء.'}
+                </p>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-slate-800 shadow-sm">
+              {verificationStatus === 'pending' ? 'عرض الحالة' : 'توثيق الآن'}
+            </span>
+          </div>
+        )}
 
         {/* Real Wallet Banner */}
         <div
@@ -391,7 +543,6 @@ export default function ProfilePage() {
                       )}
                     </div>
 
-                    {/* سبب الرفض إن وجد */}
                     {l.status === 'rejected' && (
                       <div className="mt-2 rounded-xl border border-error-200 bg-error-50 p-3 text-xs text-error-800">
                         <div className="flex items-center gap-1.5 font-bold text-error-700 mb-1">
@@ -406,7 +557,6 @@ export default function ProfilePage() {
                       </div>
                     )}
 
-                    {/* أزرار التعديل وإعادة الإرسال والحذف */}
                     <div className="mt-2 flex items-center gap-2">
                       <button
                         type="button"
@@ -485,7 +635,6 @@ export default function ProfilePage() {
         {tab === 'wallet' && (
           <div className="space-y-4 animate-fade-in">
             <h2 className="text-lg font-bold text-slate-800">سجل العمليات المالية</h2>
-            
             <div className="card overflow-hidden">
               {transactions.length === 0 ? (
                 <div className="p-10 text-center">
@@ -553,117 +702,304 @@ export default function ProfilePage() {
         )}
 
         {tab === 'edit' && (
-          <div className="card p-6">
-            <h2 className="text-lg font-bold text-slate-800 mb-4">تعديل الملف الشخصي</h2>
-            <div className="space-y-4">
-              {/* Avatar */}
-              <div className="flex items-center gap-4">
-                {editAvatar ? (
-                  <img src={editAvatar} alt="avatar" className="h-20 w-20 rounded-2xl bg-slate-50 object-contain p-1" />
-                ) : (
-                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary-100 text-2xl font-bold text-primary-700">
-                    {editName.charAt(0) || '?'}
-                  </div>
-                )}
-                <label className="btn-ghost !bg-slate-100 cursor-pointer">
-                  <Camera size={18} />
-                  تغيير الصورة
-                  <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">الاسم الكامل</label>
-                <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="input-field" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">الهاتف</label>
-                  <div className="relative">
-                    <Phone size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="input-field !pr-10" dir="ltr" />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">المدينة</label>
-                  <select value={editCity} onChange={(e) => setEditCity(e.target.value)} className="input-field">
-                    <option value="">اختر المدينة</option>
-                    {cities.map((c) => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">نبذة عنك</label>
-                <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} rows={3} className="input-field resize-none" placeholder="اكتب نبذة قصيرة عنك..." />
-              </div>
-
-              {profileSaved && (
-                <div className="flex items-center gap-2 rounded-xl bg-success-50 px-4 py-3 text-sm text-success-700">
-                  <CheckCircle size={18} />
-                  تم حفظ التغييرات بنجاح
-                </div>
-              )}
-
-              <button onClick={handleSaveProfile} disabled={savingProfile} className="btn-primary w-full">
-                {savingProfile ? (
-                  <span className="flex items-center gap-2">
-                    <Loader2 size={18} className="animate-spin" />
-                    جاري الحفظ...
-                  </span>
-                ) : 'حفظ التغييرات'}
-              </button>
-
-              {/* Admin promotion */}
-              <div className="pt-4 border-t border-slate-100">
-                {!profile.is_admin && !showAdminPromote && (
-                  <button
-                    onClick={() => setShowAdminPromote(true)}
-                    className="btn-ghost !text-slate-400 w-full"
-                  >
-                    <Shield size={18} />
-                    ترقية إلى حساب أدمن
-                  </button>
-                )}
-                {showAdminPromote && (
-                  <div className="rounded-xl bg-slate-50 p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-slate-700">ترقية إلى أدمن</h3>
-                      <button onClick={() => { setShowAdminPromote(false); setAdminError(null); }} className="text-slate-400">
-                        <X size={18} />
-                      </button>
+          <div className="space-y-6">
+            {/* قسم توثيق الهوية الشخصية لمقدم الخدمة */}
+            {isProviderAccount && (
+              <div className="card p-6 border-2 border-blue-100">
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+                      <IdCard size={22} />
                     </div>
-                    <input
-                      type="text"
-                      value={adminCode}
-                      onChange={(e) => setAdminCode(e.target.value)}
-                      placeholder="أدخل رمز الأدمن"
-                      className="input-field"
-                      dir="ltr"
-                    />
-                    {adminError && (
-                      <div className="flex items-center gap-2 text-sm text-error-600">
-                        <AlertCircle size={16} />
-                        {adminError}
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800">توثيق الهوية الشخصية</h2>
+                      <p className="text-xs text-slate-500">ارفع صورة واضحة للبطاقة الشخصية (أمامي وخلفي) للحصول على شارة (موثق)</p>
+                    </div>
+                  </div>
+                  {isVerified ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-700">
+                      <ShieldCheck size={15} /> حساب موثق
+                    </span>
+                  ) : verificationStatus === 'pending' ? (
+                    <span className="badge bg-amber-100 text-amber-700">قيد المراجعة</span>
+                  ) : null}
+                </div>
+
+                {isVerified ? (
+                  <div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-800 flex items-center gap-2">
+                    <ShieldCheck size={20} className="text-blue-600 shrink-0" />
+                    <span>تم التحقق من هويتك وتفعيل شارة <strong>(موثق)</strong> بجانب اسمك في جميع نتائج البحث.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-4 mt-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* الوجه الأمامي */}
+                      <div className="rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center bg-slate-50/60">
+                        <p className="text-xs font-bold text-slate-700 mb-2">1. الوجه الأمامي للبطاقة *</p>
+                        {frontPreview ? (
+                          <img src={frontPreview} alt="الوجه الأمامي" className="w-full h-36 object-contain rounded-xl bg-white mb-2 border" />
+                        ) : (
+                          <div className="h-36 flex flex-col items-center justify-center text-slate-400 text-xs mb-2">
+                            <Camera size={28} className="mb-1 text-slate-300" />
+                            <span>التقط صورة أو اختر ملفاً</span>
+                          </div>
+                        )}
+                        <label className="btn-ghost !bg-white !border !border-slate-200 !text-xs font-bold cursor-pointer inline-flex items-center gap-1.5">
+                          <Camera size={15} />
+                          {frontPreview ? 'تغيير الوجه الأمامي' : 'تصوير / رفع الأمامي'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={(e) => handleSelectIdImage('front', e.target.files?.[0])}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      {/* الوجه الخلفي */}
+                      <div className="rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center bg-slate-50/60">
+                        <p className="text-xs font-bold text-slate-700 mb-2">2. الوجه الخلفي للبطاقة *</p>
+                        {backPreview ? (
+                          <img src={backPreview} alt="الوجه الخلفي" className="w-full h-36 object-contain rounded-xl bg-white mb-2 border" />
+                        ) : (
+                          <div className="h-36 flex flex-col items-center justify-center text-slate-400 text-xs mb-2">
+                            <Camera size={28} className="mb-1 text-slate-300" />
+                            <span>التقط صورة أو اختر ملفاً</span>
+                          </div>
+                        )}
+                        <label className="btn-ghost !bg-white !border !border-slate-200 !text-xs font-bold cursor-pointer inline-flex items-center gap-1.5">
+                          <Camera size={15} />
+                          {backPreview ? 'تغيير الوجه الخلفي' : 'تصوير / رفع الخلفي'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={(e) => handleSelectIdImage('back', e.target.files?.[0])}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {idMessage && (
+                      <div className={`rounded-xl px-4 py-3 text-xs font-bold ${
+                        idMessage.type === 'success' ? 'bg-success-50 text-success-700' : 'bg-error-50 text-error-700'
+                      }`}>
+                        {idMessage.text}
                       </div>
                     )}
-                    <button onClick={handleAdminPromote} disabled={adminLoading || !adminCode} className="btn-primary w-full !text-sm">
-                      {adminLoading ? 'جاري...' : 'ترقية'}
+
+                    <button
+                      type="button"
+                      onClick={handleUploadIdentityDocuments}
+                      disabled={uploadingId || !frontFile || !backFile}
+                      className="btn-primary w-full disabled:opacity-50"
+                    >
+                      {uploadingId ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <Loader2 size={18} className="animate-spin" />
+                          جاري رفع البطاقة...
+                        </span>
+                      ) : (
+                        <span className="flex items-center justify-center gap-2">
+                          <Upload size={18} />
+                          إرسال البطاقة الشخصية للتوثيق
+                        </span>
+                      )}
                     </button>
                   </div>
                 )}
               </div>
+            )}
 
-              <button
-                onClick={() => { signOut(); navigate('/'); }}
-                className="btn-ghost !bg-error-50 !text-error-600 w-full sm:hidden"
-              >
-                <LogOut size={18} />
-                تسجيل الخروج
-              </button>
+            {/* تعديل البيانات الشخصية ومعايير المطابقة الذكية */}
+            <div className="card p-6">
+              <h2 className="text-lg font-bold text-slate-800 mb-4">تعديل الملف الشخصي والتوفر</h2>
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  {editAvatar ? (
+                    <img src={editAvatar} alt="avatar" className="h-20 w-20 rounded-2xl bg-slate-50 object-contain p-1" />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary-100 text-2xl font-bold text-primary-700">
+                      {editName.charAt(0) || '?'}
+                    </div>
+                  )}
+                  <label className="btn-ghost !bg-slate-100 cursor-pointer">
+                    <Camera size={18} />
+                    تغيير الصورة
+                    <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">الاسم الكامل</label>
+                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="input-field" />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-2">الهاتف</label>
+                    <div className="relative">
+                      <Phone size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="input-field !pr-10" dir="ltr" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-2">المدينة</label>
+                    <select value={editCity} onChange={(e) => setEditCity(e.target.value)} className="input-field">
+                      <option value="">اختر المدينة</option>
+                      {cities.map((c) => (
+                        <option key={c.id} value={c.name}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* حقول المطابقة الذكية لمقدمي الخدمات */}
+                {isProviderAccount && (
+                  <div className="rounded-2xl bg-slate-50 p-4 space-y-4 border border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-bold text-slate-800">حالة التوفر للعمل الفوري</p>
+                        <p className="text-xs text-slate-500">يمنحك أولوية في المطابقة الذكية عند طلب العملاء</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsAvailableNow(!isAvailableNow)}
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          isAvailableNow ? 'bg-emerald-600' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                            isAvailableNow ? '-translate-x-6' : '-translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">الحي / المنطقة (للمطابقة القريبة)</label>
+                        <input
+                          type="text"
+                          value={editDistrict}
+                          onChange={(e) => setEditDistrict(e.target.value)}
+                          placeholder="مثال: حدة، التحرير، كريتر..."
+                          className="input-field !bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">سنوات الخبرة</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="50"
+                          value={editExperienceYears}
+                          onChange={(e) => setEditExperienceYears(Number(e.target.value))}
+                          className="input-field !bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-2">
+                        <Clock size={14} className="text-primary-600" />
+                        أوقات / ورديات العمل المتاحة لديك:
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {SHIFT_OPTIONS.map((shift) => {
+                          const selected = availableShifts.includes(shift.id);
+                          return (
+                            <button
+                              key={shift.id}
+                              type="button"
+                              onClick={() => toggleShift(shift.id)}
+                              className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
+                                selected
+                                  ? 'bg-primary-600 text-white'
+                                  : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {selected ? '✓ ' : ''}{shift.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">نبذة عنك</label>
+                  <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} rows={3} className="input-field resize-none" placeholder="اكتب نبذة قصيرة عنك..." />
+                </div>
+
+                {profileSaved && (
+                  <div className="flex items-center gap-2 rounded-xl bg-success-50 px-4 py-3 text-sm text-success-700">
+                    <CheckCircle size={18} />
+                    تم حفظ التغييرات بنجاح
+                  </div>
+                )}
+
+                <button onClick={handleSaveProfile} disabled={savingProfile} className="btn-primary w-full">
+                  {savingProfile ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 size={18} className="animate-spin" />
+                      جاري الحفظ...
+                    </span>
+                  ) : 'حفظ التغييرات'}
+                </button>
+
+                {/* Admin promotion */}
+                <div className="pt-4 border-t border-slate-100">
+                  {!profile.is_admin && !showAdminPromote && (
+                    <button
+                      onClick={() => setShowAdminPromote(true)}
+                      className="btn-ghost !text-slate-400 w-full"
+                    >
+                      <Shield size={18} />
+                      ترقية إلى حساب أدمن
+                    </button>
+                  )}
+                  {showAdminPromote && (
+                    <div className="rounded-xl bg-slate-50 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-slate-700">ترقية إلى أدمن</h3>
+                        <button onClick={() => { setShowAdminPromote(false); setAdminError(null); }} className="text-slate-400">
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={adminCode}
+                        onChange={(e) => setAdminCode(e.target.value)}
+                        placeholder="أدخل رمز الأدمن"
+                        className="input-field"
+                        dir="ltr"
+                      />
+                      {adminError && (
+                        <div className="flex items-center gap-2 text-sm text-error-600">
+                          <AlertCircle size={16} />
+                          {adminError}
+                        </div>
+                      )}
+                      <button onClick={handleAdminPromote} disabled={adminLoading || !adminCode} className="btn-primary w-full !text-sm">
+                        {adminLoading ? 'جاري...' : 'ترقية'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => { signOut(); navigate('/'); }}
+                  className="btn-ghost !bg-error-50 !text-error-600 w-full sm:hidden"
+                >
+                  <LogOut size={18} />
+                  تسجيل الخروج
+                </button>
+              </div>
             </div>
           </div>
         )}
