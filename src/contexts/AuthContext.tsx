@@ -45,10 +45,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadProfile(user: User) {
-    // تفعيل وتسجيل جهاز المستخدم لاستقبال الإشعارات الفورية خارج الموقع
     subscribeToPushNotifications(user.id).catch(console.error);
 
     const pendingType = localStorage.getItem('pending_account_type');
+    const pendingBusinessName = localStorage.getItem('pending_business_name');
+    const pendingBusinessType = localStorage.getItem('pending_business_type');
 
     const { data } = await supabase
       .from('profiles')
@@ -57,26 +58,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .maybeSingle();
 
     if (data) {
-      // في حال أنشأ Trigger في قاعدة البيانات الملف بنوع افتراضي 'client' وكان المستخدم قد اختار نوعاً آخر في صفحة التسجيل عبر جوجل
-      if (pendingType && data.account_type !== pendingType) {
+      const needsTypeUpdate = pendingType && data.account_type !== pendingType;
+      const needsBusinessUpdate =
+        (pendingType === 'business' || data.account_type === 'business') &&
+        (pendingBusinessName || pendingBusinessType);
+
+      if (needsTypeUpdate || needsBusinessUpdate) {
+        const updates: Record<string, unknown> = {};
+        if (needsTypeUpdate) updates.account_type = pendingType;
+        if (pendingBusinessName) updates.business_name = pendingBusinessName;
+        if (pendingBusinessType) updates.business_type = pendingBusinessType;
+
         const { data: updated } = await supabase
           .from('profiles')
-          .update({ account_type: pendingType })
+          .update(updates)
           .eq('auth_user_id', user.id)
           .select('*')
           .maybeSingle();
+
         localStorage.removeItem('pending_account_type');
+        localStorage.removeItem('pending_business_name');
+        localStorage.removeItem('pending_business_type');
         setProfile((updated as Profile) || (data as Profile));
       } else {
         localStorage.removeItem('pending_account_type');
+        localStorage.removeItem('pending_business_name');
+        localStorage.removeItem('pending_business_type');
         setProfile(data as Profile);
       }
       setLoading(false);
       return;
     }
 
-    // إنشاء الملف الشخصي لأول مرة مع دعم بيانات Google ونوع الحساب المختار
-    const resolvedAccountType = pendingType || user.user_metadata?.account_type || 'client';
+    const rawType = pendingType || user.user_metadata?.account_type || 'individual';
+    const resolvedAccountType = rawType === 'business' ? 'business' : 'individual';
     const resolvedName =
       user.user_metadata?.full_name ||
       user.user_metadata?.name ||
@@ -90,12 +105,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         full_name: resolvedName,
         email: user.email,
         account_type: resolvedAccountType,
+        ...(resolvedAccountType === 'business' && pendingBusinessName
+          ? { business_name: pendingBusinessName }
+          : {}),
+        ...(resolvedAccountType === 'business' && pendingBusinessType
+          ? { business_type: pendingBusinessType }
+          : {}),
         ...(user.user_metadata?.avatar_url ? { avatar_url: user.user_metadata.avatar_url } : {}),
       })
       .select('*')
       .maybeSingle();
 
     localStorage.removeItem('pending_account_type');
+    localStorage.removeItem('pending_business_name');
+    localStorage.removeItem('pending_business_type');
     setProfile((created as Profile) || null);
     setLoading(false);
   }

@@ -1,20 +1,37 @@
 import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Mail, Lock, User as UserIcon, Eye, EyeOff, Briefcase, ShoppingBag, ArrowLeft, AlertCircle, KeyRound, Users } from 'lucide-react';
+import {
+  Mail, Lock, User as UserIcon, Eye, EyeOff, ArrowLeft,
+  AlertCircle, KeyRound, Building2, UserCheck
+} from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import Logo from '@/components/Logo';
 
+const BUSINESS_TYPES = [
+  'مطعم',
+  'كافيه / مقهى',
+  'شركة',
+  'مؤسسة',
+  'متجر / معرض',
+  'فندق / ضيافة',
+  'أخرى',
+];
+
 export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot' }) {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  // جعلنا القيمة الافتراضية null لإجبار المستخدم على الاختيار
-  const [accountType, setAccountType] = useState<string | null>(null);
+  const [accountType, setAccountType] = useState<'individual' | 'business' | null>(null);
+
+  // حقول حساب المنشأة / الشركة
+  const [businessName, setBusinessName] = useState('');
+  const [businessType, setBusinessType] = useState('');
+
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -24,17 +41,28 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
   const handleGoogleAuth = async () => {
     setError(null);
 
-    // في حالة إنشاء حساب جديد، نطلب اختيار نوع الحساب أولاً
-    if (mode === 'signup' && !accountType) {
-      setError('الرجاء اختيار نوع الحساب أولاً قبل المتابعة باستخدام Google');
-      return;
+    if (mode === 'signup') {
+      if (!accountType) {
+        setError('الرجاء اختيار نوع الحساب (فرد أو منشأة) أولاً قبل المتابعة باستخدام Google');
+        return;
+      }
+      if (accountType === 'business' && (!businessName.trim() || !businessType)) {
+        setError('يرجى إدخال اسم المنشأة ونوع النشاط قبل المتابعة باستخدام Google');
+        return;
+      }
     }
 
     setGoogleLoading(true);
 
-    // حفظ نوع الحساب المختار مؤقتاً لاستخدامه بعد العودة من جوجل
     if (accountType) {
       localStorage.setItem('pending_account_type', accountType);
+      if (accountType === 'business') {
+        localStorage.setItem('pending_business_name', businessName.trim());
+        localStorage.setItem('pending_business_type', businessType);
+      } else {
+        localStorage.removeItem('pending_business_name');
+        localStorage.removeItem('pending_business_type');
+      }
     }
 
     const { error } = await supabase.auth.signInWithOAuth({
@@ -69,9 +97,13 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
         navigate(from);
       }
     } else if (mode === 'signup') {
-      // التحقق من اختيار نوع الحساب
       if (!accountType) {
-        setError('الرجاء اختيار نوع الحساب لإكمال التسجيل');
+        setError('الرجاء اختيار نوع الحساب (فرد أو منشأة) لإكمال التسجيل');
+        setLoading(false);
+        return;
+      }
+      if (accountType === 'business' && (!businessName.trim() || !businessType)) {
+        setError('يرجى إدخال اسم المنشأة / الشركة واختيار نوع النشاط');
         setLoading(false);
         return;
       }
@@ -80,15 +112,30 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
         setLoading(false);
         return;
       }
+
       const { error } = await signUp(email, password, fullName, accountType);
       if (error) {
         setError(error === 'User already registered' ? 'هذا البريد مسجل بالفعل' : error);
         setLoading(false);
       } else {
+        // حفظ بيانات المنشأة في ملف المستخدم عبر auth_user_id فور إنشاء الحساب
+        if (accountType === 'business') {
+          const { data: userData } = await supabase.auth.getUser();
+          if (userData?.user) {
+            await supabase
+              .from('profiles')
+              .update({
+                account_type: 'business',
+                business_name: businessName.trim(),
+                business_type: businessType,
+              })
+              .eq('auth_user_id', userData.user.id);
+            await refreshProfile();
+          }
+        }
         navigate('/profile');
       }
     } else if (mode === 'forgot') {
-      // Simulate password reset
       setForgotSent(true);
       setLoading(false);
     }
@@ -135,7 +182,125 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
             <form onSubmit={handleSubmit} className="card p-6 space-y-4">
               {mode === 'signup' && (
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">الاسم الكامل</label>
+                  <label className="block text-sm font-bold text-slate-700 mb-3">
+                    نوع الحساب <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-1 gap-3">
+                    {/* بطاقة حساب فرد */}
+                    <button
+                      type="button"
+                      onClick={() => setAccountType('individual')}
+                      className={`flex items-start gap-3 rounded-xl border-2 p-3.5 transition-all text-right ${
+                        accountType === 'individual'
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div
+                        className={`p-2.5 rounded-xl shrink-0 transition-colors ${
+                          accountType === 'individual'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        <UserCheck size={22} />
+                      </div>
+                      <div>
+                        <span
+                          className={`block text-sm font-black mb-1 ${
+                            accountType === 'individual' ? 'text-primary-800' : 'text-slate-800'
+                          }`}
+                        >
+                          فرد
+                        </span>
+                        <span className="block text-xs text-slate-500 leading-relaxed">
+                          يقدم مهاراته وخدماته، يطلب الخدمات، ويبحث عن فرص عمل (دوام كامل أو جزئي).
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* بطاقة حساب منشأة / شركة */}
+                    <button
+                      type="button"
+                      onClick={() => setAccountType('business')}
+                      className={`flex items-start gap-3 rounded-xl border-2 p-3.5 transition-all text-right ${
+                        accountType === 'business'
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div
+                        className={`p-2.5 rounded-xl shrink-0 transition-colors ${
+                          accountType === 'business'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        <Building2 size={22} />
+                      </div>
+                      <div>
+                        <span
+                          className={`block text-sm font-black mb-1 ${
+                            accountType === 'business' ? 'text-primary-800' : 'text-slate-800'
+                          }`}
+                        >
+                          منشأة / شركة
+                        </span>
+                        <span className="block text-xs text-slate-500 leading-relaxed">
+                          مطعم، كافيه، شركة أو مؤسسة؛ لنشر فرص العمل، البحث عن الكفاءات، وطلب الخدمات.
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* حقول إضافية عند اختيار حساب منشأة */}
+              {mode === 'signup' && accountType === 'business' && (
+                <div className="rounded-xl bg-slate-50 p-3.5 space-y-3 border border-slate-200/80">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      اسم المنشأة / الشركة <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <Building2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={businessName}
+                        onChange={(e) => setBusinessName(e.target.value)}
+                        required
+                        placeholder="مثال: مطعم البيت اليمني، كافيه أرابيكا..."
+                        className="input-field !pr-10 !bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      نوع النشاط <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={businessType}
+                      onChange={(e) => setBusinessType(e.target.value)}
+                      required
+                      className="input-field !bg-white"
+                    >
+                      <option value="">اختر نوع المنشأة</option>
+                      {BUSINESS_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {mode === 'signup' && (
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    {accountType === 'business' ? 'اسم المسؤول / المدير' : 'الاسم الكامل'}
+                  </label>
                   <div className="relative">
                     <UserIcon size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
@@ -143,7 +308,7 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                       required
-                      placeholder="أدخل اسمك الكامل"
+                      placeholder={accountType === 'business' ? 'أدخل اسم مسؤول التواصل' : 'أدخل اسمك الكامل'}
                       className="input-field !pr-11"
                     />
                   </div>
@@ -187,72 +352,6 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
                     >
                       {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
-                  </div>
-                </div>
-              )}
-
-              {mode === 'signup' && (
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-3">نوع الحساب <span className="text-red-500">*</span></label>
-                  <div className="flex flex-col gap-3">
-                    
-                    {/* بطاقة مقدم خدمة */}
-                    <button
-                      type="button"
-                      onClick={() => setAccountType('provider')}
-                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
-                        accountType === 'provider'
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'provider' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
-                        <Briefcase size={22} />
-                      </div>
-                      <div>
-                        <span className={`block text-sm font-bold mb-1 ${accountType === 'provider' ? 'text-primary-800' : 'text-slate-700'}`}>مقدم خدمة</span>
-                        <span className="block text-xs text-slate-500 leading-relaxed">أضف خدماتك، استقبل الطلبات، وأدر أعمالك بشكل كامل.</span>
-                      </div>
-                    </button>
-
-                    {/* بطاقة عميل */}
-                    <button
-                      type="button"
-                      onClick={() => setAccountType('client')}
-                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
-                        accountType === 'client'
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'client' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
-                        <ShoppingBag size={22} />
-                      </div>
-                      <div>
-                        <span className={`block text-sm font-bold mb-1 ${accountType === 'client' ? 'text-primary-800' : 'text-slate-700'}`}>عميل</span>
-                        <span className="block text-xs text-slate-500 leading-relaxed">تصفح الخدمات، اطلب ما تحتاجه، وتابع حالة طلباتك.</span>
-                      </div>
-                    </button>
-
-                    {/* بطاقة الاثنين معاً */}
-                    <button
-                      type="button"
-                      onClick={() => setAccountType('both')}
-                      className={`flex items-start gap-3 rounded-xl border-2 p-3 transition-all text-right ${
-                        accountType === 'both'
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className={`p-2 rounded-lg shrink-0 transition-colors ${accountType === 'both' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'}`}>
-                        <Users size={22} />
-                      </div>
-                      <div>
-                        <span className={`block text-sm font-bold mb-1 ${accountType === 'both' ? 'text-primary-800' : 'text-slate-700'}`}>الاثنين معًا</span>
-                        <span className="block text-xs text-slate-500 leading-relaxed">استفد من كافة ميزات البيع والشراء بحساب واحد متكامل.</span>
-                      </div>
-                    </button>
-
                   </div>
                 </div>
               )}

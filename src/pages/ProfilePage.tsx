@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   MapPin, LogOut, Plus, ClipboardList, Star, Shield, ShieldCheck, Phone, Briefcase,
   Camera, X, CheckCircle, Loader2, AlertCircle, Wallet as WalletIcon,
-  ArrowRightLeft, Edit3, Trash2, RefreshCw, IdCard, Upload, Clock
+  ArrowRightLeft, Edit3, Trash2, RefreshCw, IdCard, Upload, Clock,
+  Building2, Users, MessageSquare, UserCheck, XCircle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -12,7 +13,7 @@ import { useStaticData } from '@/hooks/useStaticData';
 import type { Listing, Order, Review } from '@/types';
 import ListingCard from '@/components/ListingCard';
 
-type Tab = 'services' | 'orders' | 'reviews' | 'edit' | 'wallet';
+type Tab = 'services' | 'jobs' | 'orders' | 'reviews' | 'edit' | 'wallet';
 type UserListing = Listing & { rejection_reason?: string | null };
 
 const SHIFT_OPTIONS = [
@@ -22,14 +23,106 @@ const SHIFT_OPTIONS = [
   { id: 'urgent', label: 'طوارئ / فوري' },
 ];
 
+const DESIRED_ROLE_OPTIONS = [
+  'باريستا ومشروبات',
+  'كاشير ومحاسبة',
+  'طباخ ومساعد مطبخ',
+  'نادل وضيافة',
+  'مبيعات وخدمة عملاء',
+  'توصيل وسائقين',
+  'إدارة وإشراف',
+];
+
+const BUSINESS_TYPES = [
+  'مطعم',
+  'كافيه / مقهى',
+  'شركة',
+  'مؤسسة',
+  'متجر / معرض',
+  'فندق / ضيافة',
+  'أخرى',
+];
+
+const JOB_TYPE_LABELS: Record<string, string> = {
+  part_time: 'دوام جزئي',
+  full_time: 'دوام كامل',
+  shift: 'نظام ورديات',
+  temporary: 'عمل مؤقت',
+};
+
+// ضغط الصورة وتحويلها إلى ArrayBuffer بصيغة JPEG لتفادي خطأ Load failed في Safari iOS
+async function prepareImageForUpload(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+
+    img.onload = () => {
+      try {
+        const maxDim = 1280;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          URL.revokeObjectURL(objectUrl);
+          file.arrayBuffer().then(resolve);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          async (blob) => {
+            URL.revokeObjectURL(objectUrl);
+            if (blob) {
+              resolve(await blob.arrayBuffer());
+            } else {
+              resolve(await file.arrayBuffer());
+            }
+          },
+          'image/jpeg',
+          0.8
+        );
+      } catch {
+        URL.revokeObjectURL(objectUrl);
+        file.arrayBuffer().then(resolve);
+      }
+    };
+
+    img.onerror = async () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(await file.arrayBuffer());
+    };
+
+    img.src = objectUrl;
+  });
+}
+
 export default function ProfilePage() {
   const { profile, session, loading, signOut, refreshProfile } = useAuth();
   const { cities, categories, services } = useStaticData();
   const navigate = useNavigate();
+
+  const isBusiness = (profile?.account_type as string) === 'business';
   const [tab, setTab] = useState<Tab>('services');
   const [myListings, setMyListings] = useState<UserListing[]>([]);
   const [myOrders, setMyOrders] = useState<Order[]>([]);
   const [myReviews, setMyReviews] = useState<Review[]>([]);
+
+  // Jobs & Applications State
+  const [businessJobs, setBusinessJobs] = useState<any[]>([]);
+  const [selectedJobApplicants, setSelectedJobApplicants] = useState<{ jobTitle: string; list: any[] } | null>(null);
+  const [myApplications, setMyApplications] = useState<any[]>([]);
 
   // Wallet State
   const [walletBalance, setWalletBalance] = useState<number>(0);
@@ -46,13 +139,17 @@ export default function ProfilePage() {
   const [savingListing, setSavingListing] = useState(false);
   const [listingEditError, setListingEditError] = useState<string | null>(null);
 
-  // Edit Profile & Smart Matching form state
+  // Edit Profile, Business & Job-Seeker form state
   const [editName, setEditName] = useState('');
+  const [editBusinessName, setEditBusinessName] = useState('');
+  const [editBusinessType, setEditBusinessType] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editCity, setEditCity] = useState('');
   const [editDistrict, setEditDistrict] = useState('');
   const [editExperienceYears, setEditExperienceYears] = useState<number>(0);
   const [isAvailableNow, setIsAvailableNow] = useState<boolean>(true);
+  const [openToWork, setOpenToWork] = useState<boolean>(true);
+  const [desiredRoles, setDesiredRoles] = useState<string[]>([]);
   const [availableShifts, setAvailableShifts] = useState<string[]>([]);
   const [editBio, setEditBio] = useState('');
   const [editAvatar, setEditAvatar] = useState<string | null>(null);
@@ -79,6 +176,12 @@ export default function ProfilePage() {
     }
   }, [session, loading, navigate]);
 
+  useEffect(() => {
+    if (profile && (profile.account_type as string) === 'business' && tab === 'services') {
+      setTab('jobs');
+    }
+  }, [profile]);
+
   const fetchUserData = async () => {
     if (!profile) return;
     const [listRes, orderRes] = await Promise.all([
@@ -96,6 +199,23 @@ export default function ProfilePage() {
 
     setMyListings((listRes.data as UserListing[]) || []);
     setMyOrders((orderRes.data as Order[]) || []);
+
+    // جلب بيانات الوظائف للمنشآت أو طلبات التوظيف للأفراد
+    if ((profile.account_type as string) === 'business') {
+      const { data: jobsData } = await supabase
+        .from('jobs')
+        .select('*, applications:job_applications(*, applicant:profiles!job_applications_applicant_id_fkey(id, full_name, city, district, phone, experience_years, is_verified, avatar_url, bio))')
+        .eq('business_id', profile.id)
+        .order('created_at', { ascending: false });
+      setBusinessJobs(jobsData || []);
+    } else {
+      const { data: appsData } = await supabase
+        .from('job_applications')
+        .select('*, job:jobs(id, title, job_type, city, business:profiles!jobs_business_id_fkey(business_name, full_name))')
+        .eq('applicant_id', profile.id)
+        .order('created_at', { ascending: false });
+      setMyApplications(appsData || []);
+    }
 
     const { data: wData } = await supabase.from('wallets').select('id, balance').eq('user_id', profile.id).maybeSingle();
     if (wData) {
@@ -119,11 +239,15 @@ export default function ProfilePage() {
     if (!profile) return;
     const p = profile as any;
     setEditName(profile.full_name);
+    setEditBusinessName(p.business_name || '');
+    setEditBusinessType(p.business_type || '');
     setEditPhone(profile.phone || '');
     setEditCity(profile.city || '');
     setEditDistrict(p.district || '');
     setEditExperienceYears(Number(p.experience_years || 0));
     setIsAvailableNow(p.is_available_now !== false);
+    setOpenToWork(p.open_to_work !== false);
+    setDesiredRoles(Array.isArray(p.desired_roles) ? p.desired_roles : []);
     setAvailableShifts(Array.isArray(p.available_shifts) ? p.available_shifts : []);
     setEditBio(profile.bio || '');
     setEditAvatar(profile.avatar_url);
@@ -137,13 +261,58 @@ export default function ProfilePage() {
     );
   };
 
+  const toggleDesiredRole = (role: string) => {
+    setDesiredRoles((prev) =>
+      prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
+    );
+  };
+
+  const handleToggleJobStatus = async (jobId: string, currentStatus: string) => {
+    const nextStatus = currentStatus === 'published' ? 'closed' : 'published';
+    const { error } = await supabase
+      .from('jobs')
+      .update({ status: nextStatus })
+      .eq('id', jobId);
+    if (!error) {
+      fetchUserData();
+    }
+  };
+
+  const handleDeleteJob = async (jobId: string) => {
+    if (!confirm('هل أنت متأكد من حذف إعلان الوظيفة؟')) return;
+    const { error } = await supabase.from('jobs').delete().eq('id', jobId);
+    if (!error) {
+      fetchUserData();
+    }
+  };
+
+  const handleUpdateApplicantStatus = async (appId: string, status: 'accepted' | 'rejected') => {
+    const { error } = await supabase
+      .from('job_applications')
+      .update({ status })
+      .eq('id', appId);
+    if (!error) {
+      setSelectedJobApplicants((prev) =>
+        prev
+          ? {
+              ...prev,
+              list: prev.list.map((a) => (a.id === appId ? { ...a, status } : a)),
+            }
+          : null
+      );
+      fetchUserData();
+    }
+  };
+
   const handleSelectIdImage = (side: 'front' | 'back', file?: File) => {
     if (!file) return;
     const previewUrl = URL.createObjectURL(file);
     if (side === 'front') {
+      if (frontPreview) URL.revokeObjectURL(frontPreview);
       setFrontFile(file);
       setFrontPreview(previewUrl);
     } else {
+      if (backPreview) URL.revokeObjectURL(backPreview);
       setBackFile(file);
       setBackPreview(previewUrl);
     }
@@ -162,19 +331,29 @@ export default function ProfilePage() {
 
     try {
       const uid = session.user.id;
-      const frontExt = frontFile.name.split('.').pop() || 'jpg';
-      const backExt = backFile.name.split('.').pop() || 'jpg';
-      const frontPath = `${uid}/id-front-${Date.now()}.${frontExt}`;
-      const backPath = `${uid}/id-back-${Date.now()}.${backExt}`;
+      const timestamp = Date.now();
+      const frontPath = `${uid}/id-front-${timestamp}.jpg`;
+      const backPath = `${uid}/id-back-${timestamp}.jpg`;
+
+      const [frontBuffer, backBuffer] = await Promise.all([
+        prepareImageForUpload(frontFile),
+        prepareImageForUpload(backFile),
+      ]);
 
       const { error: frontErr } = await supabase.storage
         .from('identity_documents')
-        .upload(frontPath, frontFile, { upsert: true });
+        .upload(frontPath, frontBuffer, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
       if (frontErr) throw frontErr;
 
       const { error: backErr } = await supabase.storage
         .from('identity_documents')
-        .upload(backPath, backFile, { upsert: true });
+        .upload(backPath, backBuffer, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
       if (backErr) throw backErr;
 
       const { error: updateErr } = await supabase
@@ -200,7 +379,7 @@ export default function ProfilePage() {
     } catch (err: any) {
       setIdMessage({
         type: 'error',
-        text: err?.message || 'تعذر رفع صور البطاقة، تأكد من اتصال الإنترنت وحجم الصور.',
+        text: err?.message || 'تعذر رفع صور البطاقة، يرجى المحاولة مرة أخرى.',
       });
     } finally {
       setUploadingId(false);
@@ -273,6 +452,15 @@ export default function ProfilePage() {
       .from('profiles')
       .update({
         full_name: editName,
+        ...(isBusiness
+          ? {
+              business_name: editBusinessName.trim() || null,
+              business_type: editBusinessType || null,
+            }
+          : {
+              open_to_work: openToWork,
+              desired_roles: desiredRoles,
+            }),
         phone: editPhone,
         city: editCity,
         district: editDistrict.trim() || null,
@@ -321,15 +509,23 @@ export default function ProfilePage() {
   const pExtra = profile as any;
   const isVerified = Boolean(pExtra.is_verified || profile.provider_verified);
   const verificationStatus: string = pExtra.verification_status || (isVerified ? 'verified' : 'unverified');
-  const isProviderAccount = profile.account_type !== 'client';
+  const displayName = isBusiness ? (pExtra.business_name || profile.full_name) : profile.full_name;
 
-  const tabs: { key: Tab; label: string; count?: number }[] = [
-    { key: 'services', label: 'الخدمات', count: myListings.length },
-    { key: 'orders', label: 'الطلبات', count: myOrders.length },
-    { key: 'wallet', label: 'المحفظة' },
-    { key: 'reviews', label: 'التقييمات', count: myReviews.length },
-    { key: 'edit', label: 'الإعدادات والتوثيق' },
-  ];
+  const tabs: { key: Tab; label: string; count?: number }[] = isBusiness
+    ? [
+        { key: 'jobs', label: 'وظائف المنشأة', count: businessJobs.length },
+        { key: 'orders', label: 'طلبات الخدمات', count: myOrders.length },
+        { key: 'wallet', label: 'المحفظة' },
+        { key: 'edit', label: 'بيانات المنشأة' },
+      ]
+    : [
+        { key: 'services', label: 'خدماتي', count: myListings.length },
+        { key: 'jobs', label: 'طلبات التوظيف', count: myApplications.length },
+        { key: 'orders', label: 'الطلبات', count: myOrders.length },
+        { key: 'wallet', label: 'المحفظة' },
+        { key: 'reviews', label: 'التقييمات', count: myReviews.length },
+        { key: 'edit', label: 'الإعدادات والتوثيق' },
+      ];
 
   const getTxTypeLabel = (type: string) => {
     const types: Record<string, string> = { deposit: 'إيداع', withdrawal: 'سحب', payment: 'دفع لخدمة', refund: 'استرداد', commission: 'عمولة منصة' };
@@ -361,19 +557,21 @@ export default function ProfilePage() {
               {profile.avatar_url ? (
                 <img
                   src={profile.avatar_url}
-                  alt={profile.full_name}
+                  alt={displayName}
                   className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl bg-slate-50 object-cover p-1 ring-4 ring-white shadow-lg"
                   onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }}
                 />
               ) : null}
               <div className={`flex h-24 w-24 items-center justify-center rounded-2xl bg-primary-100 text-3xl font-black text-primary-700 ring-4 ring-white shadow-lg ${profile.avatar_url ? 'hidden' : ''}`}>
-                {profile.full_name.charAt(0)}
+                {displayName.charAt(0)}
               </div>
               <div className="flex-1 pb-1">
-                <p className="mb-0.5 text-xs font-bold text-primary-600">الملف الشخصي</p>
+                <p className="mb-0.5 text-xs font-bold text-primary-600">
+                  {isBusiness ? 'حساب منشأة / شركة' : 'حساب فرد'}
+                </p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-xl font-black text-slate-800">
-                    مرحبًا بك، {profile.full_name}
+                    مرحبًا بك، {displayName}
                   </h1>
                   {isVerified && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-700">
@@ -390,10 +588,10 @@ export default function ProfilePage() {
                     </span>
                   )}
                   <span className="flex items-center gap-1">
-                    <Briefcase size={14} className="text-primary-500" />
-                    {profile.account_type === 'provider' ? 'مقدم خدمة' : profile.account_type === 'client' ? 'عميل' : 'مقدم وعميل'}
+                    {isBusiness ? <Building2 size={14} className="text-primary-500" /> : <Briefcase size={14} className="text-primary-500" />}
+                    {isBusiness ? (pExtra.business_type || 'منشأة تجارية') : 'فرد (خدمات وتوظيف)'}
                   </span>
-                  {isProviderAccount && (
+                  {!isBusiness && (
                     <span className={`inline-flex items-center gap-1 text-xs font-bold ${pExtra.is_available_now !== false ? 'text-emerald-600' : 'text-slate-400'}`}>
                       <span className={`h-2 w-2 rounded-full ${pExtra.is_available_now !== false ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                       {pExtra.is_available_now !== false ? 'متاح للعمل' : 'غير متاح حالياً'}
@@ -416,18 +614,18 @@ export default function ProfilePage() {
               <p className="mt-4 text-sm text-slate-600 leading-relaxed">{profile.bio}</p>
             )}
 
-            {profile.skills && profile.skills.length > 0 && (
+            {!isBusiness && pExtra.desired_roles && pExtra.desired_roles.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
-                {profile.skills.map((skill, i) => (
-                  <span key={i} className="badge bg-primary-50 text-primary-700">{skill}</span>
+                {pExtra.desired_roles.map((role: string, i: number) => (
+                  <span key={i} className="badge bg-amber-50 text-amber-800">{role}</span>
                 ))}
               </div>
             )}
           </div>
         </div>
 
-        {/* تنبيه توثيق الهوية لمقدم الخدمة غير الموثق */}
-        {isProviderAccount && !isVerified && (
+        {/* تنبيه توثيق الهوية للأفراد غير الموثقين */}
+        {!isBusiness && !isVerified && (
           <div
             onClick={() => setTab('edit')}
             className={`card mb-6 flex cursor-pointer items-center justify-between gap-4 p-4 transition-colors ${
@@ -453,7 +651,7 @@ export default function ProfilePage() {
                 <p className="text-xs text-slate-600 mt-0.5">
                   {verificationStatus === 'pending'
                     ? 'تقوم إدارة المنصة بمراجعة بطاقتك وسيتم تفعيل الشارة قريباً.'
-                    : 'الحسابات الموثقة تظهر في مقدمة نتائج البحث وتكسب ثقة أصحاب المطاعم والعملاء.'}
+                    : 'الحسابات الموثقة تظهر في مقدمة نتائج البحث وتكسب ثقة أصحاب المطاعم والشركات.'}
                 </p>
               </div>
             </div>
@@ -502,8 +700,142 @@ export default function ProfilePage() {
           ))}
         </div>
 
-        {/* Tab content */}
-        {tab === 'services' && (
+        {/* JOBS TAB (للمنشآت والأفراد) */}
+        {tab === 'jobs' && (
+          <div>
+            {isBusiness ? (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-slate-800">الوظائف المنشورة والمتقدمون</h2>
+                  <Link to="/post-job" className="btn-primary !px-4 !py-2 !text-sm">
+                    <Plus size={18} />
+                    نشر وظيفة جديدة
+                  </Link>
+                </div>
+
+                {businessJobs.length === 0 ? (
+                  <div className="card p-10 text-center">
+                    <Briefcase size={36} className="mx-auto text-slate-300 mb-3" />
+                    <p className="text-slate-500 font-bold mb-1">لم تنشر أي فرصة عمل بعد</p>
+                    <p className="text-xs text-slate-400 mb-4">انشر وظائفك الشاغرة (دوام كامل أو جزئي) واستقبل طلبات المتقدمين.</p>
+                    <Link to="/post-job" className="btn-primary">
+                      <Plus size={18} />
+                      انشر أول وظيفة
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {businessJobs.map((job) => {
+                      const appsCount = Array.isArray(job.applications) ? job.applications.length : 0;
+                      return (
+                        <div key={job.id} className="card p-5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-base font-black text-slate-800">{job.title}</h3>
+                                <span className={`badge ${job.status === 'published' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                                  {job.status === 'published' ? 'نشط' : 'مغلق'}
+                                </span>
+                                <span className="badge bg-amber-50 text-amber-800">
+                                  {JOB_TYPE_LABELS[job.job_type] || job.job_type}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {job.city}{job.district ? ` - ${job.district}` : ''} • نُشر بتاريخ {new Date(job.created_at).toLocaleDateString('ar-EG')}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedJobApplicants({
+                                    jobTitle: job.title,
+                                    list: job.applications || [],
+                                  })
+                                }
+                                className="btn-primary !px-3.5 !py-2 !text-xs"
+                              >
+                                <Users size={15} />
+                                المتقدمون ({appsCount})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleJobStatus(job.id, job.status)}
+                                className="btn-ghost !bg-slate-100 !px-3 !py-2 !text-xs"
+                              >
+                                {job.status === 'published' ? 'إغلاق الإعلان' : 'إعادة فتح'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteJob(job.id)}
+                                className="rounded-xl bg-error-50 p-2 text-error-600 hover:bg-error-100"
+                                title="حذف الوظيفة"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-slate-800">طلبات التوظيف التي قدّمت عليها</h2>
+                  <Link to="/jobs" className="btn-primary !px-4 !py-2 !text-sm">
+                    <Briefcase size={16} />
+                    تصفح الوظائف
+                  </Link>
+                </div>
+
+                {myApplications.length === 0 ? (
+                  <div className="card p-10 text-center">
+                    <Briefcase size={36} className="mx-auto text-slate-300 mb-3" />
+                    <p className="text-slate-500 font-bold mb-4">لم تتقدم لأي وظيفة بعد</p>
+                    <Link to="/jobs" className="btn-primary">
+                      استكشف فرص العمل
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {myApplications.map((app) => (
+                      <div key={app.id} className="card p-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black text-slate-800">{app.job?.title || 'وظيفة'}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {app.job?.business?.business_name || app.job?.business?.full_name || 'منشأة'} • {app.job?.city}
+                          </p>
+                        </div>
+                        <span
+                          className={`badge ${
+                            app.status === 'accepted'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : app.status === 'rejected'
+                              ? 'bg-error-100 text-error-700'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {app.status === 'accepted'
+                            ? 'تم القبول للتواصل'
+                            : app.status === 'rejected'
+                            ? 'لم يتم الاختيار'
+                            : 'قيد المراجعة'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SERVICES TAB */}
+        {tab === 'services' && !isBusiness && (
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-slate-800">خدماتي</h2>
@@ -673,7 +1005,7 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {tab === 'reviews' && (
+        {tab === 'reviews' && !isBusiness && (
           <div>
             <h2 className="text-lg font-bold text-slate-800 mb-4">التقييمات</h2>
             {myReviews.length === 0 ? (
@@ -703,8 +1035,8 @@ export default function ProfilePage() {
 
         {tab === 'edit' && (
           <div className="space-y-6">
-            {/* قسم توثيق الهوية الشخصية لمقدم الخدمة */}
-            {isProviderAccount && (
+            {/* قسم توثيق الهوية الشخصية للأفراد */}
+            {!isBusiness && (
               <div className="card p-6 border-2 border-blue-100">
                 <div className="flex items-center justify-between gap-2 mb-3">
                   <div className="flex items-center gap-2.5">
@@ -733,7 +1065,6 @@ export default function ProfilePage() {
                 ) : (
                   <div className="space-y-4 mt-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* الوجه الأمامي */}
                       <div className="rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center bg-slate-50/60">
                         <p className="text-xs font-bold text-slate-700 mb-2">1. الوجه الأمامي للبطاقة *</p>
                         {frontPreview ? (
@@ -750,14 +1081,12 @@ export default function ProfilePage() {
                           <input
                             type="file"
                             accept="image/*"
-                            capture="environment"
                             onChange={(e) => handleSelectIdImage('front', e.target.files?.[0])}
                             className="hidden"
                           />
                         </label>
                       </div>
 
-                      {/* الوجه الخلفي */}
                       <div className="rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center bg-slate-50/60">
                         <p className="text-xs font-bold text-slate-700 mb-2">2. الوجه الخلفي للبطاقة *</p>
                         {backPreview ? (
@@ -774,7 +1103,6 @@ export default function ProfilePage() {
                           <input
                             type="file"
                             accept="image/*"
-                            capture="environment"
                             onChange={(e) => handleSelectIdImage('back', e.target.files?.[0])}
                             className="hidden"
                           />
@@ -799,7 +1127,7 @@ export default function ProfilePage() {
                       {uploadingId ? (
                         <span className="flex items-center justify-center gap-2">
                           <Loader2 size={18} className="animate-spin" />
-                          جاري رفع البطاقة...
+                          جاري ضغط ورفع البطاقة...
                         </span>
                       ) : (
                         <span className="flex items-center justify-center gap-2">
@@ -813,27 +1141,58 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {/* تعديل البيانات الشخصية ومعايير المطابقة الذكية */}
+            {/* تعديل البيانات الشخصية أو بيانات المنشأة */}
             <div className="card p-6">
-              <h2 className="text-lg font-bold text-slate-800 mb-4">تعديل الملف الشخصي والتوفر</h2>
+              <h2 className="text-lg font-bold text-slate-800 mb-4">
+                {isBusiness ? 'تعديل بيانات المنشأة' : 'تعديل الملف الشخصي وتفضيلات العمل'}
+              </h2>
               <div className="space-y-4">
                 <div className="flex items-center gap-4">
                   {editAvatar ? (
                     <img src={editAvatar} alt="avatar" className="h-20 w-20 rounded-2xl bg-slate-50 object-contain p-1" />
                   ) : (
                     <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary-100 text-2xl font-bold text-primary-700">
-                      {editName.charAt(0) || '?'}
+                      {displayName.charAt(0) || '?'}
                     </div>
                   )}
                   <label className="btn-ghost !bg-slate-100 cursor-pointer">
                     <Camera size={18} />
-                    تغيير الصورة
+                    {isBusiness ? 'شعار المنشأة' : 'تغيير الصورة'}
                     <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
                   </label>
                 </div>
 
+                {isBusiness && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl bg-slate-50 p-4 border border-slate-100">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">اسم المنشأة / الشركة *</label>
+                      <input
+                        type="text"
+                        value={editBusinessName}
+                        onChange={(e) => setEditBusinessName(e.target.value)}
+                        className="input-field !bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">نوع النشاط</label>
+                      <select
+                        value={editBusinessType}
+                        onChange={(e) => setEditBusinessType(e.target.value)}
+                        className="input-field !bg-white"
+                      >
+                        <option value="">اختر نوع النشاط</option>
+                        {BUSINESS_TYPES.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">الاسم الكامل</label>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    {isBusiness ? 'اسم المسؤول / المدير' : 'الاسم الكامل'}
+                  </label>
                   <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="input-field" />
                 </div>
 
@@ -856,13 +1215,13 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
-                {/* حقول المطابقة الذكية لمقدمي الخدمات */}
-                {isProviderAccount && (
+                {/* حقول التوفر والبحث عن عمل للأفراد */}
+                {!isBusiness && (
                   <div className="rounded-2xl bg-slate-50 p-4 space-y-4 border border-slate-100">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-bold text-slate-800">حالة التوفر للعمل الفوري</p>
-                        <p className="text-xs text-slate-500">يمنحك أولوية في المطابقة الذكية عند طلب العملاء</p>
+                        <p className="text-xs text-slate-500">يمنحك أولوية في الظهور بدليل الكفاءات وللعملاء</p>
                       </div>
                       <button
                         type="button"
@@ -879,9 +1238,56 @@ export default function ProfilePage() {
                       </button>
                     </div>
 
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
+                      <div>
+                        <p className="text-sm font-bold text-slate-800">البحث عن فرص عمل (توظيف)</p>
+                        <p className="text-xs text-slate-500">إظهار ملفك للمطاعم والكافيهات والشركات الباحثة عن موظفين</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setOpenToWork(!openToWork)}
+                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                          openToWork ? 'bg-primary-600' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                            openToWork ? '-translate-x-6' : '-translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {openToWork && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-2">
+                          الوظائف التي ترغب بالعمل بها:
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {DESIRED_ROLE_OPTIONS.map((role) => {
+                            const selected = desiredRoles.includes(role);
+                            return (
+                              <button
+                                key={role}
+                                type="button"
+                                onClick={() => toggleDesiredRole(role)}
+                                className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-colors ${
+                                  selected
+                                    ? 'bg-amber-500 text-white'
+                                    : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {selected ? '✓ ' : ''}{role}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">الحي / المنطقة (للمطابقة القريبة)</label>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">الحي / المنطقة</label>
                         <input
                           type="text"
                           value={editDistrict}
@@ -932,8 +1338,10 @@ export default function ProfilePage() {
                 )}
 
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">نبذة عنك</label>
-                  <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} rows={3} className="input-field resize-none" placeholder="اكتب نبذة قصيرة عنك..." />
+                  <label className="block text-sm font-bold text-slate-700 mb-2">
+                    {isBusiness ? 'نبذة عن المنشأة' : 'نبذة عنك'}
+                  </label>
+                  <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} rows={3} className="input-field resize-none" placeholder={isBusiness ? 'اكتب تعريفاً مختصراً عن نشاط منشأتك...' : 'اكتب نبذة قصيرة عنك...'} />
                 </div>
 
                 {profileSaved && (
@@ -1004,6 +1412,101 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* نافذة استعراض المتقدمين لوظيفة المنشأة */}
+      {selectedJobApplicants && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
+          onClick={() => setSelectedJobApplicants(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white p-6 max-h-[85vh] overflow-y-auto animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-black text-slate-800">المتقدمون للوظيفة</h3>
+                <p className="text-xs text-slate-500">{selectedJobApplicants.jobTitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedJobApplicants(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            {selectedJobApplicants.list.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 text-sm">
+                لا يوجد متقدمون على هذه الوظيفة حتى الآن
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {selectedJobApplicants.list.map((app: any) => (
+                  <div key={app.id} className="rounded-2xl border border-slate-200 p-4 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-black text-slate-800">{app.applicant?.full_name || 'متقدم'}</span>
+                          {app.applicant?.is_verified && <ShieldCheck size={15} className="text-blue-600" />}
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          {app.applicant?.city || 'غير محدد'}
+                          {(app.applicant?.experience_years ?? 0) > 0 ? ` • خبرة ${app.applicant.experience_years} سنوات` : ''}
+                        </p>
+                      </div>
+                      <span
+                        className={`badge ${
+                          app.status === 'accepted'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : app.status === 'rejected'
+                            ? 'bg-error-100 text-error-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {app.status === 'accepted' ? 'مقبول' : app.status === 'rejected' ? 'مرفوض' : 'جديد'}
+                      </span>
+                    </div>
+
+                    {app.cover_note && (
+                      <p className="text-xs text-slate-600 bg-slate-50 rounded-xl p-2.5 leading-relaxed">
+                        {app.cover_note}
+                      </p>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateApplicantStatus(app.id, 'accepted')}
+                        className="btn-primary flex-1 !py-2 !text-xs"
+                      >
+                        <UserCheck size={14} />
+                        قبول
+                      </button>
+                      <Link
+                        to={`/messages?to=${app.applicant?.id}`}
+                        className="btn-ghost !bg-slate-100 !px-3 !py-2 !text-xs"
+                      >
+                        <MessageSquare size={14} />
+                        مراسلة
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateApplicantStatus(app.id, 'rejected')}
+                        className="rounded-xl bg-error-50 p-2 text-error-600 hover:bg-error-100"
+                        title="رفض"
+                      >
+                        <XCircle size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* نافذة تعديل الخدمة وإعادة إرسالها للمراجعة */}
       {editingListing && (

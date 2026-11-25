@@ -1,9 +1,10 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, Search, ClipboardList, MessageCircle, User } from 'lucide-react';
+import { Home, Search, Briefcase, ClipboardList, MessageCircle, User } from 'lucide-react';
 
 const navItems = [
   { to: '/', label: 'الرئيسية', icon: Home },
   { to: '/services', label: 'الخدمات', icon: Search },
+  { to: '/jobs', label: 'الوظائف', icon: Briefcase },
   { to: '/orders', label: 'الطلبات', icon: ClipboardList },
   { to: '/messages', label: 'الرسائل', icon: MessageCircle },
   { to: '/profile', label: 'الملف', icon: User },
@@ -19,7 +20,7 @@ export default function BottomNav() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur-lg md:hidden">
-      <div className="flex items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-stretch justify-around px-1 pb-[env(safe-area-inset-bottom)]">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -35,8 +36,8 @@ export default function BottomNav() {
             >
               {({ isActive }) => (
                 <>
-                  <Icon size={22} className={isActive ? 'fill-primary-50' : ''} strokeWidth={isActive ? 2.5 : 2} />
-                  <span className={`text-[11px] font-bold ${isActive ? 'text-primary-600' : 'text-slate-400'}`}>
+                  <Icon size={20} className={isActive ? 'fill-primary-50' : ''} strokeWidth={isActive ? 2.5 : 2} />
+                  <span className={`text-[10px] font-bold ${isActive ? 'text-primary-600' : 'text-slate-400'}`}>
                     {item.label}
                   </span>
                 </>

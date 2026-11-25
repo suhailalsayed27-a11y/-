@@ -1,4 +1,4 @@
-export type AccountType = 'provider' | 'client' | 'both';
+export type AccountType = 'individual' | 'business' | 'provider' | 'client' | 'both';
 export type ProviderStatus = 'pending' | 'approved' | 'rejected';
 export type ListingStatus = 'pending' | 'published' | 'hidden' | 'rejected';
 export type OrderStatus =
@@ -47,14 +47,23 @@ export interface Profile {
   full_name: string;
   phone: string | null;
   city: string | null;
+  district?: string | null;
   avatar_url: string | null;
   account_type: AccountType;
   is_admin: boolean;
   is_disabled: boolean;
   provider_verified: boolean;
+  is_verified?: boolean;
   provider_status: ProviderStatus;
   bio: string | null;
   skills: string[];
+  desired_roles?: string[] | null;
+  open_to_work?: boolean;
+  is_available_now?: boolean;
+  experience_years?: number | null;
+  business_name?: string | null;
+  business_type?: string | null;
+  commercial_reg_url?: string | null;
   provider_earnings: number;
   pending_balance: number;
   created_at: string;
