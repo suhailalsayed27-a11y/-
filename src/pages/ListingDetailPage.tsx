@@ -66,17 +66,19 @@ export default function ListingDetailPage() {
 
   // جلب رصيد المحفظة عند فتح نافذة الطلب
   useEffect(() => {
-    if (showOrderModal && profile) {
+    if (showOrderModal && (session?.user?.id || profile?.id)) {
+      const candidateIds = [...new Set([session?.user?.id, profile?.id].filter(Boolean))];
       supabase
         .from('wallets')
         .select('balance')
-        .eq('user_id', profile.id)
+        .in('user_id', candidateIds)
+        .limit(1)
         .maybeSingle()
         .then(({ data }) => {
           setWalletBalance(data ? Number(data.balance) : 0);
         });
     }
-  }, [showOrderModal, profile]);
+  }, [showOrderModal, profile, session]);
 
   const handleContact = async () => {
     if (!profile) {

@@ -13,7 +13,7 @@ interface WorkImage {
 
 export default function AddSkillPage() {
   const navigate = useNavigate();
-  const { profile, session } = useAuth();
+  const { profile, session, loading: authLoading } = useAuth();
   const { categories, cities, services } = useStaticData();
 
   const [serviceName, setServiceName] = useState('');
@@ -29,10 +29,10 @@ export default function AddSkillPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!session) {
+    if (!authLoading && !session) {
       navigate('/auth/signin', { state: { from: '/add-skill' } });
     }
-  }, [session, navigate]);
+  }, [authLoading, session, navigate]);
 
   const availableServices = services.filter((s) => s.category_id === categoryId);
 
@@ -130,6 +130,14 @@ export default function AddSkillPage() {
       navigate('/profile');
     }, 2500);
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <Loader2 size={32} className="animate-spin text-primary-600" />
+      </div>
+    );
+  }
 
   if (!session) return null;
 
