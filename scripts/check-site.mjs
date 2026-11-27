@@ -1,32 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
+import { createClient } from '@supabase/supabase-js';
 
 const root = process.cwd();
-let totalErrors = 0;
-let totalWarnings = 0;
-
-const pass = (msg) => console.log(`\x1b[32m✔ [نجاح]\x1b[0m ${msg}`);
-const warn = (msg) => {
-  totalWarnings++;
-  console.log(`\x1b[33m⚠ [تنبيه]\x1b[0m ${msg}`);
-};
-const fail = (msg) => {
-  totalErrors++;
-  console.log(`\x1b[31m✖ [خطأ]\x1b[0m ${msg}`);
-};
-
 function loadEnv() {
   const envVars = { ...process.env };
-  for (const envFile of ['.env', '.env.local', '.env.production']) {
-    const fullPath = path.join(root, envFile);
-    if (fs.existsSync(fullPath)) {
-      for (const line of fs.readFileSync(fullPath, 'utf8').split('\n')) {
-        const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-        if (match && !envVars[match[1]]) {
-          envVars[match[1]] = (match[2] || '').replace(/^['"]|['"]$/g, '');
-        }
+  for (const f of ['.env', '.env.local']) {
+    const p = path.join(root, f);
+    if (fs.existsSync(p)) {
+      for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+        const m = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+        if (m && !envVars[m[1]]) envVars[m[1]] = (m[2] || '').replace(/^['"]|['"]$/g, '').trim();
       }
     }
   }
@@ -34,533 +20,270 @@ function loadEnv() {
 }
 
 const env = loadEnv();
-const SUPABASE_URL = env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY;
-const SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_ROLE_KEY || env.VITE_SUPABASE_SERVICE_ROLE_KEY;
-
-console.log('\n====================================================================');
-console.log('   الفحص الشامل: قاعدة البيانات (Supabase) + الموقع + الأزرار والعمليات');
-console.log('====================================================================\n');
-
-// ------------------------------------------------------------------
-// 1. فحص جداول وأعمدة قاعدة بيانات Supabase الفعلية
-// ------------------------------------------------------------------
-console.log('--- [1/4] فحص جداول وأعمدة قاعدة بيانات Supabase ---');
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  fail('مفاتيح VITE_SUPABASE_URL أو VITE_SUPABASE_ANON_KEY مفقودة في ملف .env');
-} else {
-  const dbChecks = [
-    { label: 'جدول الملفات الشخصية والكفاءات (profiles)', query: 'profiles?select=id,full_name,account_type&limit=1' },
-    { label: 'جدول الخدمات (listings)', query: 'listings?select=id,provider_id,category_id,service_name,description,price,city,status&limit=1' },
-    { label: 'جدول التصنيفات (categories)', query: 'categories?select=id,name&limit=1' },
-    { label: 'جدول المدن (cities)', query: 'cities?select=id,name&limit=1' },
-    { label: 'جدول الوظائف (jobs)', query: 'jobs?select=id,title,job_type,city,status&limit=1' },
-    { label: 'جدول طلبات التوظيف (job_applications)', query: 'job_applications?select=id,job_id,applicant_id,status&limit=1' },
-    { label: 'جدول الطلبات (orders)', query: 'orders?select=id,listing_id,status&limit=1' },
-    { label: 'جدول الرسائل (messages)', query: 'messages?select=id,conversation_id,sender_id,body,read_at&limit=1' },
-    { label: 'جدول الإشعارات (notifications)', query: 'notifications?select=id,title&limit=1' },
-    { label: 'جدول المحافظ المالية (wallets)', query: 'wallets?select=id,balance&limit=1' },
-  ];
-
-  for (const item of dbChecks) {
-    try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${item.query}`, {
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        },
-      });
-      if (res.ok) {
-        pass(`القاعدة سليمة: ${item.label}`);
-      } else {
-        fail(`خطأ في قاعدة البيانات ← ${item.label} [${res.status}]: ${await res.text()}`);
-      }
-    } catch (e) {
-      fail(`تعذر الاتصال بقاعدة البيانات لفحص ${item.label}: ${e.message}`);
-    }
-  }
+if (!env.SUPABASE_SERVICE_ROLE_KEY || !env.TEST_ADMIN_EMAIL || !env.TEST_ADMIN_PASSWORD) {
+  console.error('❌ تأكد من وجود SUPABASE_SERVICE_ROLE_KEY و TEST_ADMIN_EMAIL و TEST_ADMIN_PASSWORD في ملف .env');
+  process.exit(1);
 }
 
-// ------------------------------------------------------------------
-// 2. فحص الكود البرمجي وبناء الموقع
-// ------------------------------------------------------------------
-console.log('\n--- [2/4] فحص الكود البرمجي وبناء الموقع ---');
-try {
-  execSync('npx tsc --noEmit', { stdio: 'pipe' });
-  pass('كود TypeScript سليم 100% بدون أخطاء.');
-} catch (err) {
-  fail('خطأ برمجي في TypeScript:');
-  console.log(err.stdout?.toString() || err.message);
-}
-
-try {
-  execSync('npm run build', { stdio: 'pipe' });
-  pass('بناء الإنتاج (npm run build) نجح بالكامل.');
-} catch (err) {
-  fail('فشل بناء الإنتاج:');
-  console.log(err.stderr?.toString() || err.message);
-}
-
-// ------------------------------------------------------------------
-// 3. تشغيل السيرفر واختبار دورة (نشر خدمة -> طلبها -> إنجازها)
-// ------------------------------------------------------------------
-console.log('\n--- [3/4] اختبار دورة نشر وطلب وإنجاز الخدمة في الموقع والقاعدة ---');
-const server = spawn('npm run dev -- --port 4173', {
-  shell: true,
-  stdio: 'ignore',
+const adminSb = createClient(env.VITE_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const waitForServer = async (url, retries = 30) => {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return true;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 600));
-  }
-  return false;
-};
+const stamp = Date.now();
+const adminEmail = env.TEST_ADMIN_EMAIL;
+const adminPass = env.TEST_ADMIN_PASSWORD;
+const provEmail = `prov.${stamp}@mahrah-test.local`;
+const clientEmail = `client.${stamp}@mahrah-test.local`;
+const testPass = `Mahrah#${stamp}X9`;
 
+const createdIds = { users: [], listings: [] };
+let origHomepage = null;
+
+const { data: sampleProfile } = await adminSb.from('profiles').select('account_type, city').limit(1).maybeSingle();
+const defaultCity = sampleProfile?.city || 'صنعاء';
+const defaultAccountType = sampleProfile?.account_type || 'client';
+
+async function createTestUser(email, fullName, desiredType) {
+  const { data, error } = await adminSb.auth.admin.createUser({
+    email,
+    password: testPass,
+    email_confirm: true,
+    user_metadata: {
+      full_name: fullName,
+      account_type: defaultAccountType,
+      city: defaultCity,
+      phone: '770000000',
+    },
+  });
+  if (error) throw error;
+  const uid = data.user.id;
+  createdIds.users.push(uid);
+
+  await new Promise((r) => setTimeout(r, 300));
+  const { data: profRow } = await adminSb
+    .from('profiles')
+    .update({
+      full_name: fullName,
+      account_type: desiredType,
+      city: defaultCity,
+      provider_status: desiredType === 'provider' ? 'pending' : 'approved',
+    })
+    .or(`id.eq.${uid},auth_user_id.eq.${uid}`)
+    .select('id')
+    .single();
+
+  return { authId: uid, profileId: profRow?.id || uid };
+}
+
+console.log('⏳ تجهيز بيانات الاختبار المؤقتة...');
+const { data: existingAdmin, error: adminFetchErr } = await adminSb
+  .from('profiles')
+  .select('id, auth_user_id, is_admin')
+  .eq('email', adminEmail)
+  .maybeSingle();
+
+if (adminFetchErr || !existingAdmin?.is_admin) {
+  throw new Error(`الحساب (${adminEmail}) غير موجود في profiles أو لا يملك صلاحية is_admin = true`);
+}
+// AdminPage يستخدم profile.id عند إضافة خدمة جديدة
+const adminProfileId = existingAdmin.id;
+
+const prov = await createTestUser(provEmail, 'مزود خدمة للاختبار', 'provider');
+const client = await createTestUser(clientEmail, 'عميل رصيد للاختبار', 'client');
+
+await adminSb.from('wallets').upsert({ user_id: client.profileId, balance: 25000, currency: 'YER' }, { onConflict: 'user_id' });
+
+const { data: cat } = await adminSb.from('categories').select('id').limit(1).single();
+const { data: city } = await adminSb.from('cities').select('name').limit(1).single();
+
+const { data: lApprove } = await adminSb.from('listings').insert({
+  provider_id: prov.profileId,
+  category_id: cat.id,
+  service_name: `خدمة اعتماد تجريبية ${stamp}`,
+  city: city?.name || defaultCity,
+  description: 'وصف خدمة للاختبار',
+  price: 5000,
+  status: 'pending',
+}).select('id').single();
+if (lApprove) createdIds.listings.push(lApprove.id);
+
+const { data: lReject } = await adminSb.from('listings').insert({
+  provider_id: prov.profileId,
+  category_id: cat.id,
+  service_name: `خدمة رفض تجريبية ${stamp}`,
+  city: city?.name || defaultCity,
+  description: 'وصف خدمة مرفوضة للاختبار',
+  price: 4000,
+  status: 'pending',
+}).select('id').single();
+if (lReject) createdIds.listings.push(lReject.id);
+
+const { data: hpBackup } = await adminSb.from('homepage_settings').select('*').eq('id', 1).maybeSingle();
+origHomepage = hpBackup;
+
+const server = spawn('npm run dev -- --port 4173', { shell: true, stdio: 'ignore' });
 const baseUrl = 'http://localhost:4173';
-if (!(await waitForServer(baseUrl))) {
-  fail('تعذر تشغيل السيرفر المحلي.');
-  server.kill();
-  process.exit(1);
+for (let i = 0; i < 30; i++) {
+  try { if ((await fetch(baseUrl)).ok) break; } catch {}
+  await new Promise((r) => setTimeout(r, 500));
 }
 
 const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page.setDefaultTimeout(8000);
 
-const stamp = Date.now();
-const providerEmail = `test_provider_${stamp}@mahra-test.com`;
-const clientEmail = `test_client_${stamp}@mahra-test.com`;
-const testPassword = `MahraTest#${stamp}`;
-const testServiceName = `خدمة اختبار تلقائي ${stamp}`;
-
-function getAdminHeaders() {
-  if (!SUPABASE_SERVICE_KEY) return null;
-  return {
-    apikey: SUPABASE_SERVICE_KEY,
-    ...(SUPABASE_SERVICE_KEY.startsWith('sb_secret_') ? {} : { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` }),
-    'Content-Type': 'application/json',
-  };
-}
-
-async function finalizeTestProfile(authData, fullName, accountType) {
-  let profileId = null;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await new Promise((r) => setTimeout(r, 400));
-    const profRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?or=(id.eq.${authData.user.id},auth_user_id.eq.${authData.user.id})&select=id`,
-      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${authData.access_token}` } }
-    );
-    const profRows = await profRes.json().catch(() => []);
-    if (Array.isArray(profRows) && profRows[0]?.id) {
-      profileId = profRows[0].id;
-      break;
-    }
+const errors = [];
+page.on('pageerror', (e) => errors.push(`JS Error: ${e.message}`));
+page.on('console', (m) => { if (m.type() === 'error') errors.push(`Console Error: ${m.text()}`); });
+page.on('response', (r) => {
+  if (r.status() >= 400 && !r.url().includes('favicon')) {
+    errors.push(`HTTP ${r.status()} on ${r.url()}`);
   }
+});
 
-  authData.profileId = profileId || authData.user.id;
+const alerts = [];
+page.on('dialog', async (dialog) => {
+  if (dialog.type() === 'alert') alerts.push(dialog.message());
+  await dialog.accept();
+});
 
-  await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${authData.profileId}`, {
-    method: 'PATCH',
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${authData.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ full_name: fullName, account_type: accountType }),
-  });
+try {
+  // 1. تسجيل دخول الأدمن
+  await page.goto(`${baseUrl}/auth/signin`, { waitUntil: 'networkidle' });
+  await page.locator('input[type="email"]').fill(adminEmail);
+  await page.locator('input[type="password"]').fill(adminPass);
+  await page.locator('form button[type="submit"]').click();
+  await page.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
+  console.log('✔ [1/7] تسجيل دخول المشرف بنجاح');
 
-  if (accountType === 'individual') {
-    const adminHeaders = getAdminHeaders();
-    const walletHeaders = adminHeaders || {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${authData.access_token}`,
-      'Content-Type': 'application/json',
-    };
+  // 2. فتح /admin والمرور على جميع روابط القائمة الجانبية الـ 12 داخل aside nav
+  await page.goto(`${baseUrl}/admin`, { waitUntil: 'networkidle' });
+  const navLinks = page.locator('aside nav a');
+  await navLinks.first().waitFor({ state: 'visible', timeout: 10000 });
 
-    const authUserId = authData.user.id;
-    const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/wallets?user_id=eq.${authUserId}`, {
-      method: 'PATCH',
-      headers: { ...walletHeaders, Prefer: 'return=representation' },
-      body: JSON.stringify({ balance: 50000 }),
-    });
-    const patchedRows = patchRes.ok ? await patchRes.json().catch(() => []) : [];
-
-    if (!Array.isArray(patchedRows) || patchedRows.length === 0) {
-      const postRes = await fetch(`${SUPABASE_URL}/rest/v1/wallets`, {
-        method: 'POST',
-        headers: { ...walletHeaders, Prefer: 'return=representation' },
-        body: JSON.stringify({ user_id: authUserId, balance: 50000 }),
-      });
-      if (!postRes.ok) {
-        const errBody = await postRes.text();
-        warn(`سبب فشل إنشاء المحفظة (${postRes.status}): ${errBody}`);
-      }
-    }
-  }
-
-  return authData;
-}
-
-async function createTestUser(email, fullName, accountType) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
-
-  const adminHeaders = getAdminHeaders();
-  if (adminHeaders) {
-    const adminRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        email,
-        password: testPassword,
-        email_confirm: true,
-        user_metadata: { full_name: fullName, account_type: accountType },
-      }),
-    });
-
-    if (adminRes.ok) {
-      const loginRes = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-        method: 'POST',
-        headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: testPassword }),
-      });
-      const loginData = await loginRes.json();
-      if (loginRes.ok && loginData.access_token) {
-        return await finalizeTestProfile(loginData, fullName, accountType);
-      }
-    } else {
-      const errData = await adminRes.json().catch(() => ({}));
-      const reason = errData.msg || errData.message || adminRes.status;
-      warn(`تعذر الإنشاء عبر مفتاح الإدارة (${reason}) — جاري تجربة التسجيل العادي...`);
-    }
-  }
-
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-    method: 'POST',
-    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password: testPassword,
-      data: { full_name: fullName, account_type: accountType },
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    const reason = data.msg || data.error_description || data.message || JSON.stringify(data);
-    warn(`تعذر إنشاء حساب اختبار تلقائي (${email}) — السبب: ${reason}`);
-    return null;
-  }
-
-  return await finalizeTestProfile(data, fullName, accountType);
-}
-
-async function deleteTestUser(userId) {
-  const adminHeaders = getAdminHeaders();
-  if (!adminHeaders || !userId) return;
-  await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-    method: 'DELETE',
-    headers: adminHeaders,
-  }).catch(() => {});
-}
-
-const providerAuth = await createTestUser(providerEmail, 'مقدّم خدمة تجريبي', 'business');
-const clientAuth = await createTestUser(clientEmail, 'عميل تجريبي', 'individual');
-
-if (providerAuth && clientAuth) {
-  const providerToken = providerAuth.access_token;
-  const clientToken = clientAuth.access_token;
-  const storageKey = `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
-
-  const openAuthedContext = async (authSession) => {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    await ctx.addInitScript(
-      ([k, v]) => window.localStorage.setItem(k, JSON.stringify(v)),
-      [storageKey, authSession]
-    );
-    const p = await ctx.newPage();
-    const apiErrors = [];
-    p.on('response', (res) => {
-      if (res.status() >= 400 && !res.url().includes('favicon')) {
-        apiErrors.push(`[${res.status()}] ${res.request().method()} ${res.url()}`);
-      }
-    });
-    p.on('pageerror', (err) => apiErrors.push(`JS Error: ${err.message}`));
-    return { ctx, p, apiErrors };
-  };
-
-  let listingId = null;
-  let orderId = null;
-  const prov = await openAuthedContext(providerAuth);
-  let cli = null;
-
-  try {
-    await prov.p.goto(`${baseUrl}/add-skill`, { waitUntil: 'domcontentloaded' });
-    await prov.p.waitForSelector('form .grid button[type="button"]', { timeout: 8000 }).catch(() => {});
-
-    const categoryBtn = prov.p.locator('form .grid button[type="button"]:visible').first();
-    if ((await categoryBtn.count()) > 0) {
-      await categoryBtn.click();
-      await prov.p.waitForTimeout(400);
-    }
-
-    const selects = prov.p.locator('form select:visible');
-    for (let i = 0; i < (await selects.count()); i++) {
-      const opts = await selects.nth(i).locator('option').count();
-      if (opts > 1) await selects.nth(i).selectOption({ index: 1 });
-    }
-
-    const enabledTextInputs = prov.p.locator('form input[type="text"]:visible:not([disabled])');
-    if ((await enabledTextInputs.count()) > 0) {
-      await enabledTextInputs.first().fill(testServiceName);
-      if ((await enabledTextInputs.count()) > 1) {
-        await enabledTextInputs.nth(1).fill('5 سنوات');
-      }
-    }
-
-    const numInput = prov.p.locator('form input[type="number"]:visible').first();
-    if ((await numInput.count()) > 0) await numInput.fill('5000');
-
-    const textareas = prov.p.locator('form textarea:visible');
-    if ((await textareas.count()) > 0) {
-      await textareas.first().fill('وصف خدمة الاختبار التلقائي للتحقق من القاعدة والموقع.');
-    }
-
-    const submitBtn = prov.p.locator('form button[type="submit"]:visible').first();
-    if ((await submitBtn.count()) > 0) {
-      await submitBtn.click();
-      await prov.p.waitForTimeout(2000);
-    }
-
-    const checkListingRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/listings?provider_id=eq.${providerAuth.profileId}&select=id,service_name,status&order=created_at.desc&limit=1`,
-      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${providerToken}` } }
-    );
-    const createdListings = await checkListingRes.json();
-
-    if (Array.isArray(createdListings) && createdListings.length > 0) {
-      listingId = createdListings[0].id;
-      pass(`نشر الخدمة (${createdListings[0].service_name}) نجح وحُفظ في قاعدة البيانات (الحالة: ${createdListings[0].status}).`);
-
-      if (createdListings[0].status !== 'published') {
-        await fetch(`${SUPABASE_URL}/rest/v1/listings?id=eq.${listingId}`, {
-          method: 'PATCH',
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${providerToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ status: 'published' }),
-        });
-      }
-
-      cli = await openAuthedContext(clientAuth);
-      await cli.p.goto(`${baseUrl}/listing/${listingId}`, { waitUntil: 'domcontentloaded' });
-      await cli.p.waitForTimeout(1000);
-
-      if (new URL(cli.p.url()).pathname === '/') {
-        fail('خطأ توجيه: الدخول إلى تفاصيل الخدمة أعاد العميل إلى الصفحة الرئيسية (/)!');
-      } else {
-        pass(`صفحة تفاصيل الخدمة (/listing/${listingId}) فتحت بنجاح.`);
-        await cli.p.waitForSelector('main button:visible', { timeout: 6000 }).catch(() => {});
-
-        const orderBtn = cli.p.locator('main button:visible').filter({ hasText: 'طلب الخدمة' }).first();
-        if ((await orderBtn.count()) > 0) {
-          await orderBtn.click();
-          await cli.p.waitForTimeout(1200);
-
-          const modalTextarea = cli.p.locator('textarea:visible').first();
-          if ((await modalTextarea.count()) > 0) {
-            await modalTextarea.fill('ملاحظة وتفاصيل طلب الاختبار التلقائي');
-          }
-
-          const confirmBtn = cli.p.locator('button:visible').filter({ hasText: 'تأكيد الطلب' }).first();
-          await confirmBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-
-          if ((await confirmBtn.count()) > 0 && (await confirmBtn.isEnabled())) {
-            await confirmBtn.click({ timeout: 5000 });
-            await cli.p.waitForTimeout(2000);
-
-            const ordersRes = await fetch(
-              `${SUPABASE_URL}/rest/v1/orders?listing_id=eq.${listingId}&select=id,status`,
-              { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${clientToken}` } }
-            );
-            const createdOrders = await ordersRes.json();
-
-            if (Array.isArray(createdOrders) && createdOrders.length > 0) {
-              orderId = createdOrders[0].id;
-              pass(`طلب الخدمة نجح وحُفظ في جدول orders (الحالة: ${createdOrders[0].status}).`);
-
-              await prov.p.goto(`${baseUrl}/orders/${orderId}`, { waitUntil: 'domcontentloaded' });
-              await prov.p.waitForTimeout(1000);
-
-              for (let step = 0; step < 3; step++) {
-                const actionBtn = prov.p.locator('button:visible').filter({ hasText: /قبول|بدء|تسليم|إنجاز|مكتمل/ }).first();
-                if ((await actionBtn.count()) > 0 && (await actionBtn.isEnabled())) {
-                  const label = (await actionBtn.innerText()).trim();
-                  await actionBtn.click();
-                  await prov.p.waitForTimeout(1000);
-                  pass(`مقدّم الخدمة نفّذ خطوة (${label}) بنجاح.`);
-                } else break;
-              }
-
-              await cli.p.goto(`${baseUrl}/orders/${orderId}`, { waitUntil: 'domcontentloaded' });
-              await cli.p.waitForTimeout(1000);
-              const clientConfirmBtn = cli.p.locator('button:visible').filter({ hasText: /استلام|تأكيد|إنجاز|مكتمل/ }).first();
-              if ((await clientConfirmBtn.count()) > 0 && (await clientConfirmBtn.isEnabled())) {
-                const label = (await clientConfirmBtn.innerText()).trim();
-                await clientConfirmBtn.click();
-                await cli.p.waitForTimeout(1000);
-                pass(`العميل نفّذ خطوة (${label}) لإتمام العملية بنجاح.`);
-              }
-            } else {
-              fail('الضغط على زر تأكيد الطلب لم ينشئ طلباً في جدول orders بقاعدة البيانات!');
-            }
-          } else {
-            const modalText = await cli.p.locator('.fixed.z-50').first().innerText().catch(() => '');
-            fail(`زر تأكيد الطلب بقي معطلاً (disabled) — تفاصيل نافذة الدفع: ${modalText.replace(/\s+/g, ' ')}`);
-          }
-        } else {
-          fail('لم يُعثر على زر (طلب الخدمة) في صفحة التفاصيل!');
-        }
-      }
-    } else {
-      const currentPath = new URL(prov.p.url()).pathname;
-      const uiError = await prov.p.locator('[class*="error"]').first().innerText().catch(() => '');
-      fail(`فشل نشر الخدمة (المسار الحالي: ${currentPath}) — رسالة الصفحة: ${uiError || 'لا توجد'}`);
-    }
-  } finally {
-    if (cli) {
-      if (cli.apiErrors.length > 0) {
-        fail('أخطاء قاعدة بيانات أو شبكة أثناء رحلة العميل:');
-        cli.apiErrors.forEach((e) => console.log('   -', e));
-      }
-      await cli.ctx.close();
-    }
-    if (prov.apiErrors.length > 0) {
-      fail('أخطاء قاعدة بيانات أو شبكة أثناء رحلة مقدّم الخدمة:');
-      prov.apiErrors.forEach((e) => console.log('   -', e));
-    }
-    await prov.ctx.close();
-
-    const adminHeaders = getAdminHeaders();
-    const cleanupHeaders = adminHeaders || { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${clientToken}` };
-    if (orderId) {
-      await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${orderId}`, {
-        method: 'DELETE',
-        headers: cleanupHeaders,
-      }).catch(() => {});
-    }
-    if (listingId) {
-      await fetch(`${SUPABASE_URL}/rest/v1/listings?id=eq.${listingId}`, {
-        method: 'DELETE',
-        headers: adminHeaders || { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${providerToken}` },
-      }).catch(() => {});
-    }
-    await deleteTestUser(providerAuth.user?.id);
-    await deleteTestUser(clientAuth.user?.id);
-  }
-}
-
-// ------------------------------------------------------------------
-// 4. فحص كل صفحة وكل زر قابل للنقر في الموقع (لابتوب + جوال)
-// ------------------------------------------------------------------
-console.log('\n--- [4/4] فحص كل صفحة وكل زر قابل للنقر في الموقع (لابتوب + جوال) ---');
-const viewports = [
-  { name: 'اللابتوب (Desktop)', width: 1280, height: 800 },
-  { name: 'الجوال (Mobile)', width: 390, height: 844 },
-];
-
-for (const vp of viewports) {
-  console.log(`\n> اختبار واجهة ${vp.name}:`);
-  const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
-  const page = await context.newPage();
-
-  const runtimeErrors = [];
-  page.on('pageerror', (err) => runtimeErrors.push(`JS Error: ${err.message}`));
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') runtimeErrors.push(`Console Error: ${msg.text()}`);
-  });
-  page.on('response', (res) => {
-    if (res.status() >= 400 && !res.url().includes('favicon')) {
-      runtimeErrors.push(`HTTP [${res.status()}]: ${res.url()}`);
-    }
-  });
-
-  const queue = ['/', '/services', '/jobs', '/talents', '/post-job', '/add-skill', '/orders', '/messages', '/wallet', '/profile', '/auth'];
-  const visited = new Set();
-
-  while (queue.length > 0) {
-    const targetPath = queue.shift();
-    if (visited.has(targetPath)) continue;
-    visited.add(targetPath);
-
-    try {
-      await page.goto(`${baseUrl}${targetPath}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    } catch (err) {
-      fail(`تعذر فتح الصفحة (${targetPath}): ${err.message.split('\n')[0]}`);
-      continue;
-    }
+  const totalLinks = await navLinks.count();
+  const visitedTabs = [];
+  for (let i = 0; i < totalLinks; i++) {
+    const link = navLinks.nth(i);
+    const label = (await link.innerText()).trim();
+    await link.click();
     await page.waitForTimeout(500);
+    // التحقق من ظهور عنوان القسم في الهيدر
+    await page.locator('header h1', { hasText: label }).waitFor({ state: 'visible' });
+    visitedTabs.push(label);
+  }
+  console.log(`✔ [2/7] تم فحص جميع الأقسام الـ (${visitedTabs.length}): [${visitedTabs.join(' | ')}]`);
 
-    const links = await page.evaluate(() =>
-      [...document.querySelectorAll('a[href^="/"]')].map((a) => a.getAttribute('href')).filter(Boolean)
-    );
-    for (const href of links) {
-      const clean = href.split('?')[0];
-      if (!visited.has(clean) && !queue.includes(clean) && queue.length < 35) {
-        queue.push(clean);
-      }
-    }
+  // 3. اختبار قسم الخدمات (الموافقة عبر RPC + الرفض مع سبب عبر RPC + إضافة خدمة)
+  await page.locator('aside nav a[href="/admin/listings"]').click();
+  await page.waitForTimeout(600);
 
-    const clickables = page.locator('main button:visible');
-    const count = await clickables.count();
-    let clicked = 0;
+  // الموافقة على الخدمة الأولى
+  const approveCard = page.locator('div.card', { hasText: `خدمة اعتماد تجريبية ${stamp}` });
+  await approveCard.locator('button', { hasText: 'موافقة' }).click();
+  await page.waitForTimeout(800);
 
-    for (let i = 0; i < count; i++) {
-      if (new URL(page.url()).pathname !== targetPath) break;
-
-      const el = clickables.nth(i);
-      if ((await el.count()) === 0) break;
-
-      try {
-        const type = await el.getAttribute('type', { timeout: 1000 });
-        if (type === 'submit') continue;
-        const text = (await el.innerText().catch(() => '')).trim();
-        if (!text) continue;
-
-        if (await el.isEnabled({ timeout: 1000 })) {
-          await el.scrollIntoViewIfNeeded({ timeout: 1000 });
-          await el.click({ timeout: 2000, force: true });
-          clicked++;
-          await page.waitForTimeout(100);
-        }
-      } catch (e) {
-        const text = await el.innerText().catch(() => 'زر بدون نص');
-        fail(`عنصر لا يستجيب للنقر في (${targetPath}) [${text.trim()}]: ${e.message.split('\n')[0]}`);
-      }
-    }
-    pass(`(${targetPath}) ← تم فحص (${clicked}) زر/عنصر قابل للنقر بنجاح.`);
+  const { data: approvedCheck } = await adminSb.from('listings').select('status').eq('id', lApprove.id).single();
+  if (approvedCheck?.status !== 'published') {
+    throw new Error(`فشل اعتماد الخدمة عبر admin_approve_service (الحالة: ${approvedCheck?.status})`);
   }
 
-  if (runtimeErrors.length > 0) {
-    fail(`أخطاء في الموقع أو قاعدة البيانات على ${vp.name}:`);
-    [...new Set(runtimeErrors)].forEach((e) => console.log('   -', e));
-  } else {
-    pass(`صفر أخطاء في الموقع وقاعدة البيانات على ${vp.name}.`);
+  // رفض الخدمة الثانية مع السبب
+  const rejectCard = page.locator('div.card', { hasText: `خدمة رفض تجريبية ${stamp}` });
+  await rejectCard.locator('button', { hasText: 'رفض' }).click();
+  const rejectModal = page.locator('div.fixed.inset-0.z-50');
+  await rejectModal.locator('textarea').fill('سبب رفض تجريبي للتأكد من عمل دالة RPC');
+  await rejectModal.locator('button', { hasText: 'تأكيد الرفض وإرسال الرسالة' }).click();
+  await page.waitForTimeout(800);
+
+  const { data: rejectedCheck } = await adminSb.from('listings').select('status, rejection_reason').eq('id', lReject.id).single();
+  if (rejectedCheck?.status !== 'rejected') {
+    throw new Error(`فشل رفض الخدمة عبر admin_reject_service (الحالة: ${rejectedCheck?.status})`);
   }
 
-  await context.close();
-}
+  // إضافة خدمة جديدة من لوحة الأدمن والتأكد من ارتباطها بـ profile.id للأدمن الحالي
+  await page.locator('button', { hasText: 'إضافة خدمة' }).click();
+  const addModal = page.locator('div.fixed.inset-0.z-50');
+  const addedTitle = `خدمة مضافة من الأدمن ${stamp}`;
+  await addModal.locator('input[type="text"]').first().fill(addedTitle);
+  await addModal.locator('select').first().selectOption(cat.id);
+  await addModal.locator('input[type="number"]').fill('9000');
+  await addModal.locator('button', { hasText: 'حفظ' }).click();
+  await page.waitForTimeout(900);
 
-await browser.close();
-server.kill();
+  const { data: addedListing } = await adminSb.from('listings').select('id, provider_id').eq('service_name', addedTitle).maybeSingle();
+  if (!addedListing || addedListing.provider_id !== adminProfileId) {
+    throw new Error('الخدمة المضافة من لوحة الأدمن لم تُربط بحساب الأدمن الحالي!');
+  }
+  createdIds.listings.push(addedListing.id);
+  console.log('✔ [3/7] نجاح اعتماد ورفض الخدمات عبر RPC + إضافة خدمة مرتبطة بحساب الأدمن');
 
-console.log('\n====================================================================');
-if (totalErrors > 0) {
-  console.log(`\x1b[31mالنتيجة النهائية: وُجد (${totalErrors}) خطأ و (${totalWarnings}) تنبيه.\x1b[0m\n`);
-  process.exit(1);
-} else {
-  console.log(`\x1b[32mالنتيجة النهائية: قاعدة البيانات والموقع والأزرار ودورة الطلب سليمة 100%!\x1b[0m\n`);
+  // 4. اختبار قسم المستخدمين (حماية حساب الأدمن الحالي + مطابقة رصيد المحفظة)
+  await page.locator('aside nav a[href="/admin/users"]').click();
+  await page.waitForTimeout(600);
+
+  const adminRow = page.locator('tr', { hasText: adminEmail });
+  const selfProtected = await adminRow.locator('text=حسابك الحالي').isVisible();
+  if (!selfProtected) throw new Error('لم يظهر نص "حسابك الحالي" لحماية حساب الأدمن');
+
+  const clientRow = page.locator('tr', { hasText: clientEmail });
+  const clientRowText = await clientRow.innerText();
+  if (!clientRowText.includes('25')) throw new Error('لم يظهر رصيد محفظة العميل (25,000) في جدول المستخدمين');
+  console.log('✔ [4/7] نجاح حماية حساب الأدمن الحالي + مطابقة رصيد المحفظة في جدول المستخدمين');
+
+  // 5. اختبار قسم المالية والمحافظ
+  await page.locator('aside nav a[href="/admin/finance"]').click();
+  await page.waitForTimeout(600);
+  await page.locator('button', { hasText: 'محافظ المستخدمين' }).click();
+  await page.waitForTimeout(400);
+  const walletTableText = await page.locator('table').innerText();
+  if (!walletTableText.includes('عميل رصيد للاختبار')) throw new Error('اسم صاحب المحفظة لم يظهر في جدول المحافظ');
+  await page.locator('button', { hasText: 'سجل المعاملات' }).click();
+  await page.waitForTimeout(300);
+  console.log('✔ [5/7] نجاح فحص المالية والمحافظ ومطابقة أسماء أصحاب المحافظ');
+
+  // 6. اختبار حفظ إعدادات الصفحة الرئيسية (upsert)
+  await page.locator('aside nav a[href="/admin/homepage"]').click();
+  await page.waitForTimeout(500);
+  const testHeroTitle = `عنوان اختباري ${stamp}`;
+  await page.locator('main input[type="text"]').first().fill(testHeroTitle);
+  await page.locator('main button', { hasText: 'حفظ التغييرات' }).click();
+  await page.waitForTimeout(800);
+  const { data: hpUpdated } = await adminSb.from('homepage_settings').select('hero_title').eq('id', 1).single();
+  if (hpUpdated?.hero_title !== testHeroTitle) throw new Error('فشل حفظ إعدادات الصفحة الرئيسية عبر upsert');
+  console.log('✔ [6/7] نجاح حفظ إعدادات الصفحة الرئيسية عبر upsert');
+
+  // 7. فحص تجاوب لوحة الأدمن على الجوال + فتح القائمة الجانبية
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${baseUrl}/admin`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
+  if (overflow) errors.push('يوجد تجاوز عرضي (Horizontal Overflow) على شاشة الجوال');
+  await page.locator('header button').first().click();
+  await page.waitForTimeout(300);
+  console.log('✔ [7/7] نجاح فحص التجاوب على شاشة الجوال (390x844)');
+
+  console.log('\n====================================');
+  console.log(`التنبيهات غير المتوقعة: ${alerts.length}`);
+  if (alerts.length) console.log(alerts.join('\n'));
+  console.log(`إجمالي الأخطاء المكتشفة: ${errors.length}`);
+  if (errors.length) console.log(errors.join('\n'));
+  else console.log('🎉 جميع اختبارات لوحة الأدمن نجحت بنسبة 100%!');
+  console.log('====================================');
+} finally {
+  await browser.close();
+  server.kill();
+
+  if (origHomepage) {
+    await adminSb.from('homepage_settings').upsert(origHomepage, { onConflict: 'id' });
+  }
+  for (const lid of createdIds.listings) {
+    await adminSb.from('listings').delete().eq('id', lid);
+  }
+  for (const uid of createdIds.users) {
+    await adminSb.from('notifications').delete().eq('user_id', uid);
+    await adminSb.from('wallets').delete().eq('user_id', uid);
+    await adminSb.from('profiles').delete().or(`id.eq.${uid},auth_user_id.eq.${uid}`);
+    await adminSb.auth.admin.deleteUser(uid);
+  }
 }

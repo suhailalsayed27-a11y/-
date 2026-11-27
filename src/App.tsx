@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import {
-  Home, Sparkles, Briefcase, Users, MessageSquare, User, LogIn
+  Home, Sparkles, Briefcase, Users, MessageSquare, User, LogIn, Shield, Package
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import Logo from '@/components/Logo';
@@ -20,6 +20,21 @@ import WalletPage from '@/pages/WalletPage';
 import ProfilePage from '@/pages/ProfilePage';
 import AuthPage from '@/pages/AuthPage';
 import AdminPage from '@/pages/AdminPage';
+
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { profile, loading } = useAuth();
+  if (loading) return null;
+  if (!profile) return <Navigate to="/auth" replace />;
+  return children;
+}
+
+function RequireAdmin({ children }: { children: JSX.Element }) {
+  const { profile, loading } = useAuth();
+  if (loading) return null;
+  if (!profile) return <Navigate to="/auth" replace />;
+  if (!profile.is_admin) return <Navigate to="/" replace />;
+  return children;
+}
 
 export default function App() {
   const { profile } = useAuth();
@@ -79,6 +94,17 @@ export default function App() {
                 طلباتي
               </Link>
             )}
+            {profile?.is_admin && (
+              <Link
+                to="/admin"
+                className={`flex items-center gap-1 px-3.5 py-2 rounded-xl text-sm font-bold transition-colors ${
+                  isActive('/admin') ? 'bg-amber-100 text-amber-800' : 'text-amber-700 hover:bg-amber-50'
+                }`}
+              >
+                <Shield size={15} />
+                <span>الإدارة</span>
+              </Link>
+            )}
           </nav>
 
           <div className="flex items-center gap-2">
@@ -111,19 +137,29 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/services" element={<ServicesPage />} />
           <Route path="/listing/:id" element={<ListingDetailPage />} />
-          <Route path="/add-skill" element={<AddSkillPage />} />
           <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/post-job" element={<PostJobPage />} />
           <Route path="/talents" element={<TalentsPage />} />
-          <Route path="/orders" element={<OrdersPage />} />
-          <Route path="/orders/:id" element={<OrderDetailPage />} />
-          <Route path="/messages" element={<MessagesPage />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
-          <Route path="/wallet" element={<WalletPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
+
+          {/* مسارات المصادقة المتوافقة */}
           <Route path="/auth" element={<AuthPage mode="signin" />} />
+          <Route path="/auth/signin" element={<AuthPage mode="signin" />} />
           <Route path="/signup" element={<AuthPage mode="signup" />} />
-          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/auth/signup" element={<AuthPage mode="signup" />} />
+          <Route path="/auth/forgot" element={<AuthPage mode="forgot" />} />
+
+          {/* مسارات محمية للمستخدمين المسجلين */}
+          <Route path="/add-skill" element={<RequireAuth><AddSkillPage /></RequireAuth>} />
+          <Route path="/post-job" element={<RequireAuth><PostJobPage /></RequireAuth>} />
+          <Route path="/orders" element={<RequireAuth><OrdersPage /></RequireAuth>} />
+          <Route path="/orders/:id" element={<RequireAuth><OrderDetailPage /></RequireAuth>} />
+          <Route path="/messages" element={<RequireAuth><MessagesPage /></RequireAuth>} />
+          <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
+          <Route path="/wallet" element={<RequireAuth><WalletPage /></RequireAuth>} />
+          <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+
+          {/* مسار الإدارة المحمي */}
+          <Route path="/admin" element={<RequireAdmin><AdminPage /></RequireAdmin>} />
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -131,7 +167,7 @@ export default function App() {
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 px-2 py-1.5 flex items-center justify-around">
         <Link
           to="/"
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[11px] font-bold ${
+          className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
             isActive('/') ? 'text-primary-600' : 'text-slate-500'
           }`}
         >
@@ -140,7 +176,7 @@ export default function App() {
         </Link>
         <Link
           to="/services"
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[11px] font-bold ${
+          className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
             isActive('/services') ? 'text-primary-600' : 'text-slate-500'
           }`}
         >
@@ -149,25 +185,37 @@ export default function App() {
         </Link>
         <Link
           to="/jobs"
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[11px] font-bold ${
+          className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
             isActive('/jobs') ? 'text-primary-600' : 'text-slate-500'
           }`}
         >
           <Briefcase size={20} />
           <span>الوظائف</span>
         </Link>
-        <Link
-          to="/talents"
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[11px] font-bold ${
-            isActive('/talents') ? 'text-primary-600' : 'text-slate-500'
-          }`}
-        >
-          <Users size={20} />
-          <span>الكفاءات</span>
-        </Link>
+        {profile ? (
+          <Link
+            to="/orders"
+            className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
+              isActive('/orders') ? 'text-primary-600' : 'text-slate-500'
+            }`}
+          >
+            <Package size={20} />
+            <span>طلباتي</span>
+          </Link>
+        ) : (
+          <Link
+            to="/talents"
+            className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
+              isActive('/talents') ? 'text-primary-600' : 'text-slate-500'
+            }`}
+          >
+            <Users size={20} />
+            <span>الكفاءات</span>
+          </Link>
+        )}
         <Link
           to={profile ? '/profile' : '/auth'}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl text-[11px] font-bold ${
+          className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl text-[11px] font-bold ${
             isActive('/profile') || isActive('/auth') ? 'text-primary-600' : 'text-slate-500'
           }`}
         >

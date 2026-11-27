@@ -339,15 +339,18 @@ function ListingsSection() {
   useEffect(() => { fetchListings(); }, []);
 
   const updateStatus = async (id: string, status: string) => {
-    const updates: Record<string, unknown> = { status };
     if (status === 'published') {
-      updates.rejection_reason = null;
-    }
-
-    const { error } = await supabase.from('listings').update(updates).eq('id', id);
-    if (error) {
-      alert('حدث خطأ: ' + error.message);
-      return;
+      const { error } = await supabase.rpc('admin_approve_service', { p_listing_id: id });
+      if (error) {
+        alert('حدث خطأ أثناء الموافقة: ' + error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from('listings').update({ status }).eq('id', id);
+      if (error) {
+        alert('حدث خطأ: ' + error.message);
+        return;
+      }
     }
 
     const targetListing = listings.find((l) => l.id === id);
@@ -378,13 +381,10 @@ function ListingsSection() {
 
     setRejectSubmitting(true);
 
-    const { error } = await supabase
-      .from('listings')
-      .update({
-        status: 'rejected',
-        rejection_reason: reasonText,
-      })
-      .eq('id', rejectingListing.id);
+    const { error } = await supabase.rpc('admin_reject_service', {
+      p_listing_id: rejectingListing.id,
+      p_reason: reasonText,
+    });
 
     if (error) {
       setRejectSubmitting(false);
@@ -618,7 +618,8 @@ function ListingsSection() {
 }
 
 function ListingEditModal({ listing, onClose, onSaved }: { listing: Listing | null; onClose: () => void; onSaved: () => void }) {
-  const { categories } = useStaticData();
+  const { profile } = useAuth();
+  const { categories, cities } = useStaticData();
   const [serviceName, setServiceName] = useState(listing?.service_name || '');
   const [categoryId, setCategoryId] = useState(listing?.category_id || '');
   const [city, setCity] = useState(listing?.city || 'صنعاء');
@@ -628,21 +629,21 @@ function ListingEditModal({ listing, onClose, onSaved }: { listing: Listing | nu
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
+    if (!profile) return;
     setSaving(true);
     if (listing) {
-      await supabase.from('listings').update({
+      const { error } = await supabase.from('listings').update({
         service_name: serviceName, category_id: categoryId, city, description,
         price: Number(price), experience,
       }).eq('id', listing.id);
+      if (error) alert('تعذر التعديل: ' + error.message);
     } else {
-      const { data: demoProvider } = await supabase.from('profiles').select('id').limit(1).maybeSingle();
-      if (demoProvider) {
-        await supabase.from('listings').insert({
-          provider_id: demoProvider.id, category_id: categoryId,
-          service_name: serviceName, city, description,
-          price: Number(price), experience, status: 'published',
-        });
-      }
+      const { error } = await supabase.from('listings').insert({
+        provider_id: profile.id, category_id: categoryId,
+        service_name: serviceName, city, description,
+        price: Number(price), experience, status: 'published',
+      });
+      if (error) alert('تعذر إضافة الخدمة: ' + error.message);
     }
     setSaving(false);
     onSaved();
@@ -665,8 +666,14 @@ function ListingEditModal({ listing, onClose, onSaved }: { listing: Listing | nu
         <div>
           <label className="block text-sm font-bold text-slate-700 mb-1.5">المدينة</label>
           <select value={city} onChange={(e) => setCity(e.target.value)} className="input-field">
-            <option value="صنعاء">صنعاء</option>
-            <option value="عدن">عدن</option>
+            {cities.length > 0 ? (
+              cities.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)
+            ) : (
+              <>
+                <option value="صنعاء">صنعاء</option>
+                <option value="عدن">عدن</option>
+              </>
+            )}
           </select>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -1034,8 +1041,9 @@ function CitiesSection() {
 
 // ============ USERS ============
 function UsersSection() {
-  const [users, setUsers] = useState<(Profile & { is_verified?: boolean })[]>([]);
-  const [wallets, setWallets] = useState<{user_id: string, balance: number}[]>([]);
+  const { profile: currentAdmin } = useAuth();
+  const [users, setUsers] = useState<(Profile & { is_verified?: boolean; auth_user_id?: string })[]>([]);
+  const [wallets, setWallets] = useState<{ user_id: string; balance: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
@@ -1043,22 +1051,32 @@ function UsersSection() {
     (async () => {
       const [{ data: usersData }, { data: walletsData }] = await Promise.all([
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
-        supabase.from('wallets').select('user_id, balance')
+        supabase.from('wallets').select('user_id, balance'),
       ]);
-      setUsers((usersData as (Profile & { is_verified?: boolean })[]) || []);
+      setUsers((usersData as (Profile & { is_verified?: boolean; auth_user_id?: string })[]) || []);
       setWallets(walletsData || []);
       setLoading(false);
     })();
   }, []);
 
   const toggleDisable = async (u: Profile) => {
-    await supabase.from('profiles').update({ is_disabled: !u.is_disabled }).eq('id', u.id);
+    if (u.id === currentAdmin?.id) return;
+    const { error } = await supabase.from('profiles').update({ is_disabled: !u.is_disabled }).eq('id', u.id);
+    if (error) {
+      alert('حدث خطأ: ' + error.message);
+      return;
+    }
     setUsers(users.map((x) => x.id === u.id ? { ...x, is_disabled: !x.is_disabled } : x));
   };
 
   const deleteUser = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا المستخدم؟ لا يمكن التراجع.')) return;
-    await supabase.from('profiles').delete().eq('id', id);
+    if (id === currentAdmin?.id) return;
+    if (!confirm('هل أنت متأكد من حذف ملف هذا المستخدم؟ (يفضل استخدام زر التعطيل بدلاً من الحذف للحفاظ على سجل الطلبات)')) return;
+    const { error } = await supabase.from('profiles').delete().eq('id', id);
+    if (error) {
+      alert('لا يمكن حذف المستخدم لارتباطه بطلبات أو معاملات مالية سابقة. استخدم زر التعطيل بدلاً من ذلك.');
+      return;
+    }
     setUsers(users.filter((u) => u.id !== id));
   };
 
@@ -1095,7 +1113,8 @@ function UsersSection() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.map((u) => {
-              const wallet = wallets.find(w => w.user_id === u.id);
+              const wallet = wallets.find((w) => w.user_id === u.id || (u.auth_user_id && w.user_id === u.auth_user_id));
+              const isSelf = u.id === currentAdmin?.id;
               return (
                 <tr key={u.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
@@ -1133,18 +1152,22 @@ function UsersSection() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => toggleDisable(u)}
-                        className={`btn-ghost !px-2.5 !py-1.5 ${u.is_disabled ? '!bg-success-50 !text-success-600' : '!bg-accent-50 !text-accent-600'}`}
-                        title={u.is_disabled ? 'تفعيل' : 'تعطيل'}
-                      >
-                        {u.is_disabled ? <CheckCircle size={16} /> : <EyeOff size={16} />}
-                      </button>
-                      <button onClick={() => deleteUser(u.id)} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5" title="حذف">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                    {isSelf ? (
+                      <span className="text-xs font-bold text-slate-400">حسابك الحالي</span>
+                    ) : (
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => toggleDisable(u)}
+                          className={`btn-ghost !px-2.5 !py-1.5 ${u.is_disabled ? '!bg-success-50 !text-success-600' : '!bg-accent-50 !text-accent-600'}`}
+                          title={u.is_disabled ? 'تفعيل' : 'تعطيل'}
+                        >
+                          {u.is_disabled ? <CheckCircle size={16} /> : <EyeOff size={16} />}
+                        </button>
+                        <button onClick={() => deleteUser(u.id)} className="btn-ghost !bg-error-50 !text-error-600 !px-2.5 !py-1.5" title="حذف">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -2279,13 +2302,13 @@ function DisputesSection() {
 // ============ FINANCE & WALLETS ============
 function FinanceSection() {
   const [tab, setTab] = useState<'overview' | 'wallets' | 'transactions'>('overview');
-  
+
   const [stats, setStats] = useState({
     totalOrderValue: 0, totalCustomerFees: 0, totalProviderFees: 0,
     mahraRevenue: 0, completedCount: 0, cancelledCount: 0, disputedCount: 0,
     totalOrders: 0, avgOrderValue: 0, totalWalletBalances: 0
   });
-  
+
   const [settings, setSettings] = useState({
     customer_fee_percentage: 2.5, provider_fee_percentage: 2.5,
     minimum_customer_fee: 100, minimum_provider_fee: 100,
@@ -2294,7 +2317,7 @@ function FinanceSection() {
   const [wallets, setWallets] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
-  
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -2317,7 +2340,7 @@ function FinanceSection() {
       const [{ data: wData }, { data: tData }, { data: pData }] = await Promise.all([
         supabase.from('wallets').select('*'),
         supabase.from('wallet_transactions').select('*').order('created_at', { ascending: false }),
-        supabase.from('profiles').select('id, full_name, email')
+        supabase.from('profiles').select('id, auth_user_id, full_name, email')
       ]);
 
       const totalWalletBalances = (wData || []).reduce((sum, w) => sum + Number(w.balance), 0);
@@ -2364,7 +2387,7 @@ function FinanceSection() {
     const types: Record<string, string> = { deposit: 'إيداع', withdrawal: 'سحب', payment: 'دفع لخدمة', refund: 'استرداد', commission: 'عمولة للمنصة' };
     return types[type] || type;
   };
-  
+
   const getTxStatusLabel = (status: string) => {
     const statuses: Record<string, string> = { pending: 'بانتظار التأكيد', completed: 'مكتمل', rejected: 'مرفوض', failed: 'فاشل' };
     return statuses[status] || status;
@@ -2484,7 +2507,7 @@ function FinanceSection() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {wallets.map(w => {
-                const user = profiles.find(p => p.id === w.user_id);
+                const user = profiles.find((p) => p.id === w.user_id || p.auth_user_id === w.user_id);
                 return (
                   <tr key={w.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3 font-bold text-slate-800">{user?.full_name || 'مستخدم مجهول'}</td>
@@ -2523,8 +2546,8 @@ function FinanceSection() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {transactions.map(tx => {
-                const wallet = wallets.find(w => w.id === tx.wallet_id);
-                const user = profiles.find(p => p.id === wallet?.user_id);
+                const wallet = wallets.find((w) => w.id === tx.wallet_id);
+                const user = profiles.find((p) => p.id === wallet?.user_id || p.auth_user_id === wallet?.user_id);
                 const isPositive = ['deposit', 'refund'].includes(tx.type);
                 return (
                   <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
@@ -2577,13 +2600,20 @@ function HomepageSection() {
 
   const handleSave = async () => {
     setSaving(true);
-    await supabase.from('homepage_settings').update({
+    const { error } = await supabase.from('homepage_settings').upsert({
+      id: 1,
       hero_title: settings.hero_title,
       hero_description: settings.hero_description,
       hero_image_url: settings.hero_image_url || null,
       updated_at: new Date().toISOString(),
-    }).eq('id', 1);
+    }, { onConflict: 'id' });
     setSaving(false);
+
+    if (error) {
+      alert('حدث خطأ أثناء حفظ إعدادات الصفحة الرئيسية: ' + error.message);
+      return;
+    }
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };

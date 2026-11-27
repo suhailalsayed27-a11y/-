@@ -94,7 +94,7 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
         setLoading(false);
       } else {
         const from = (location.state as { from?: string })?.from || '/';
-        navigate(from);
+        navigate(from, { replace: true });
       }
     } else if (mode === 'signup') {
       if (!accountType) {
@@ -133,10 +133,17 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
             await refreshProfile();
           }
         }
-        navigate('/profile');
+        navigate('/profile', { replace: true });
       }
     } else if (mode === 'forgot') {
-      setForgotSent(true);
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/signin`,
+      });
+      if (error) {
+        setError('تعذر إرسال رابط الاستعادة، تأكد من صحة البريد الإلكتروني وحاول مرة أخرى');
+      } else {
+        setForgotSent(true);
+      }
       setLoading(false);
     }
   };
@@ -437,13 +444,6 @@ export default function AuthPage({ mode }: { mode: 'signin' | 'signup' | 'forgot
           {mode === 'forgot' && !forgotSent && (
             <p className="text-center text-sm text-slate-500 mt-6">
               <Link to="/auth/signin" className="font-bold text-primary-600 hover:text-primary-700">العودة لتسجيل الدخول</Link>
-            </p>
-          )}
-
-          {/* Admin hint */}
-          {mode === 'signin' && (
-            <p className="text-center text-xs text-slate-300 mt-8">
-              للوصول كأدمن، سجل دخول ثم استخدم صفحة ترقية الأدمن
             </p>
           )}
         </div>
